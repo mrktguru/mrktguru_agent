@@ -171,7 +171,15 @@ MOCKUP_SYSTEM = dedent("""
     - If the product has forms: show input fields with validation styling.
     - If the product shows results/output: show a realistic result card.
     - Make buttons interactive (hover, click effects in JS).
-    - No markdown, no explanation. Return ONLY the HTML starting with <!DOCTYPE html>.
+
+    CRITICAL — what NOT to do:
+    - NEVER show Google, Yandex, or any external search engine screens. The user flow may
+      describe HOW people find the product (via search), but you must show only the product
+      itself — its own pages and UI.
+    - NEVER simulate browser address bars or competitor websites.
+    - Every screen must be a page/screen of the actual product being built.
+
+    No markdown, no explanation. Return ONLY the HTML starting with <!DOCTYPE html>.
 """).strip()
 
 
@@ -192,17 +200,20 @@ def get_mockup_prompt(spec: dict, project_name: str) -> str:
         Problem it solves: {idea.get('problem', '')}
         Target users: {idea.get('target_user', '')}
 
-        MVP Features:
+        MVP Features (these are the things the app does — show them in the UI):
         {_json.dumps(mvp, ensure_ascii=False, indent=2)}
 
-        User flow (screens to show):
+        User flow steps (these describe what the USER DOES inside your app — each step = one screen of YOUR app):
         {_json.dumps(user_flow, ensure_ascii=False, indent=2)}
 
         Tech stack: {_json.dumps(stack, ensure_ascii=False)}
-        Components: {_json.dumps(components, ensure_ascii=False)}
+        App components: {_json.dumps(components, ensure_ascii=False)}
 
-        Generate a complete HTML file. Each user flow step = one screen.
-        Show realistic placeholder content for this specific domain.
+        IMPORTANT: Show only your own app's screens. If a flow step mentions
+        "Google" or "search engine" — skip it and start from the first screen
+        the user sees ON YOUR SITE. Every screen must be a real page of the product.
+
+        Generate a complete HTML file with realistic placeholder content for this domain.
         Return ONLY the HTML.
     """).strip()
 
