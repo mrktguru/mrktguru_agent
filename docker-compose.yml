@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-appforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-appforge}
+      POSTGRES_DB: ${POSTGRES_DB:-appforge}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - appforge
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - appforge
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend:/app
+      - ssh_keys:/app/keys
+    command: >
+      bash -c "alembic upgrade head &&
+               uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    networks:
+      - appforge
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app
+      - ssh_keys:/app/keys
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info
+    networks:
+      - appforge
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - appforge
+
+volumes:
+  postgres_data:
+  ssh_keys:
+
+networks:
+  appforge:
+    driver: bridge
