@@ -285,6 +285,7 @@ export default function ProjectPage() {
             <div className="h-full p-6 flex flex-col">
               <UIMockup
                 spec={spec}
+                projectId={projectId}
                 onDeploy={() => {
                   startDeploy();
                   setSideTab("deploy");

@@ -104,3 +104,41 @@ async def patch_spec(
     await db.commit()
     await db.refresh(project)
     return _serialize(project)
+
+
+@router.post("/{project_id}/mockup")
+async def generate_mockup(
+    project_id: str,
+    user: CurrentUser,
+    db: DB,
+) -> dict[str, str]:
+    """Generate an AI HTML prototype and store it in spec.mockup.html."""
+    from app.services.claude.client import ClaudeClient
+    from app.services.claude.prompts import MOCKUP_SYSTEM, get_mockup_prompt
+
+    project = await db.get(Project, project_id)
+    if not project or project.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    claude = ClaudeClient()
+    prompt = get_mockup_prompt(project.spec or {}, project.name)
+    result = claude.call_with_system(
+        system=MOCKUP_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=8000,
+    )
+    html: str = result["content"]
+    # Strip accidental markdown fences if present
+    if html.lstrip().startswith("```"):
+        html = "\n".join(
+            line for line in html.splitlines()
+            if not line.strip().startswith("```")
+        )
+
+    spec: dict[str, Any] = dict(project.spec or {})
+    spec.setdefault("mockup", {})["html"] = html
+    project.spec = spec
+    flag_modified(project, "spec")
+    await db.commit()
+    return {"html": html}
+

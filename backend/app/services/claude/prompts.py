@@ -149,3 +149,60 @@ def get_phase_system_prompt(phase: int) -> str:
 
 def get_code_generator_system_prompt() -> str:
     return CODE_GENERATOR_SYSTEM
+
+
+MOCKUP_SYSTEM = dedent("""
+    You are an expert UI/UX designer and senior frontend developer.
+    Generate a complete, beautiful, INTERACTIVE HTML prototype for a web application.
+
+    Rules:
+    - Single self-contained HTML file: inline CSS + vanilla JS only. NO external CDN/fonts.
+    - Multiple screens: one per user flow step. Each screen is a <div> shown/hidden by JS.
+    - PROFESSIONAL design: looks like a real launched product, NOT a wireframe.
+    - Dark theme. Primary accent color: pick one that fits the product (indigo for tools,
+      orange for commerce, teal for health, etc.)
+    - Real UI components: app header with logo+nav, sidebar list of screens, content area,
+      forms with realistic labels/placeholders, cards with actual data, buttons with hover effects.
+    - Show REAL content: use actual feature names, actual user flow action text,
+      actual stack/domain from the spec. Invent realistic placeholder data (fake product names,
+      prices, barcodes, etc.) that match the product category.
+    - Smooth CSS transitions between screens (opacity + translateY).
+    - Sidebar shows all screen names; clicking navigates. Prev/Next buttons at bottom.
+    - If the product has forms: show input fields with validation styling.
+    - If the product shows results/output: show a realistic result card.
+    - Make buttons interactive (hover, click effects in JS).
+    - No markdown, no explanation. Return ONLY the HTML starting with <!DOCTYPE html>.
+""").strip()
+
+
+def get_mockup_prompt(spec: dict, project_name: str) -> str:
+    import json as _json
+    idea = spec.get("idea", {})
+    product = spec.get("product", {})
+    workflow = spec.get("workflow", {})
+    mvp = product.get("features", {}).get("mvp", [])
+    user_flow = workflow.get("user_flow", [])
+    stack = workflow.get("stack", {})
+    components = workflow.get("components", [])
+    return dedent(f"""
+        Create an interactive HTML prototype for this product:
+
+        App Name: {project_name}
+        Type: {_json.dumps(idea.get('type', ['web_app']), ensure_ascii=False)}
+        Problem it solves: {idea.get('problem', '')}
+        Target users: {idea.get('target_user', '')}
+
+        MVP Features:
+        {_json.dumps(mvp, ensure_ascii=False, indent=2)}
+
+        User flow (screens to show):
+        {_json.dumps(user_flow, ensure_ascii=False, indent=2)}
+
+        Tech stack: {_json.dumps(stack, ensure_ascii=False)}
+        Components: {_json.dumps(components, ensure_ascii=False)}
+
+        Generate a complete HTML file. Each user flow step = one screen.
+        Show realistic placeholder content for this specific domain.
+        Return ONLY the HTML.
+    """).strip()
+
