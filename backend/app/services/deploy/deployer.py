@@ -22,7 +22,9 @@ from app.core.security import decrypt_credentials
 from app.models.deploy_log import DeployLog
 from app.models.project import Project
 from app.models.server import Server
+from app.services.deploy.auto_fix import suggest_fix
 from app.services.deploy.generator import CodeGenerator
+from app.services.ml.knowledge import MLKnowledgeBase
 from app.services.ssh.client import SSHClient
 
 LogFn = Callable[[str, str, str, str | None], None]
@@ -98,6 +100,32 @@ class ProjectDeployer:
         combined = (out + err).strip()
         return StepResult(ok=(code == 0), output=combined)
 
+    def _try_auto_fix(self, step: str, error: str) -> bool:
+        server_info = {
+            "os": self.server.os_info,
+            "hardware": self.server.hardware_info,
+            "installed": self.server.installed_software,
+        }
+        try:
+            fix = suggest_fix(step, error, self.spec, server_info)
+        except Exception as ex:  # noqa: BLE001
+            self._log(step, "error", f"auto-fix call failed: {ex}")
+            return False
+
+        commands = fix.get("commands") or []
+        if not commands:
+            self._log(step, "error", "auto-fix: no commands suggested")
+            return False
+
+        self._log(step, "running", f"auto-fix: {fix.get('explanation', '')[:200]}")
+        for cmd in commands:
+            r = self._run(cmd, timeout=600)
+            self._log(step, "running", f"$ {cmd}", raw=r.output[-1500:])
+            if not r.ok:
+                self._log(step, "error", f"fix cmd failed: {cmd}")
+                return False
+        return True
+
     # --------------- pipeline ---------------
 
     def deploy(self) -> None:
@@ -113,8 +141,20 @@ class ProjectDeployer:
                 for step_id, step_name in PIPELINE_STEPS:
                     self._log(step_id, "running", f"{step_name}…")
                     method = getattr(self, f"_step_{step_id}")
-                    method()
-                    self._log(step_id, "success", f"{step_name} ✓")
+                    try:
+                        method()
+                        self._log(step_id, "success", f"{step_name} ✓")
+                    except DeployError as err:
+                        self._log(step_id, "error", f"{step_name} ✗: {err}")
+                        if self._try_auto_fix(step_id, str(err)):
+                            try:
+                                method()
+                            except DeployError as err2:
+                                self._log(step_id, "error", f"{step_name} ✗ (после фикса): {err2}")
+                                raise
+                            self._log(step_id, "fixed", f"{step_name} ✓ (исправлено)")
+                        else:
+                            raise
             finally:
                 if self._ssh is not None:
                     self._ssh.close()
@@ -124,6 +164,12 @@ class ProjectDeployer:
             self.project.deployed_at = _now()
             self.db.commit()
             self._log("done", "success", "Готово 🎉")
+
+            # Learn from this deploy so suggestions get better next time.
+            try:
+                MLKnowledgeBase().record_project_sync(self.db, self.spec)
+            except Exception as learn_err:  # noqa: BLE001
+                self._log("learn", "error", f"record_project failed: {learn_err}")
         except DeployError as e:
             self.project.status = "error"
             self.db.commit()

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project
 from app.services.claude.client import ClaudeClient
+from app.services.ml.knowledge import MLKnowledgeBase
 
 
 def _merge_spec(current: dict[str, Any] | None, delta: dict[str, Any] | None) -> dict[str, Any]:
@@ -45,14 +46,22 @@ class AgentService:
     def __init__(self, db: AsyncSession, claude: ClaudeClient | None = None) -> None:
         self.db = db
         self.claude = claude or ClaudeClient()
+        self.ml = MLKnowledgeBase()
 
     async def turn(self, project: Project, user_message: str) -> dict[str, Any]:
         history: list[dict[str, str]] = list(project.conversation_history or [])
         history.append({"role": "user", "content": user_message})
 
         spec_text = json.dumps(project.spec, ensure_ascii=False, indent=2) if project.spec else ""
-        # ML patterns context will be wired in once the knowledge base is populated.
+
+        # Phase 2 benefits the most from prior-project signals.
         ml_text = ""
+        if project.current_phase == 2:
+            project_type = ((project.spec or {}).get("idea") or {}).get("type") or []
+            if isinstance(project_type, str):
+                project_type = [project_type]
+            description = ((project.spec or {}).get("idea") or {}).get("description") or user_message
+            ml_text = await self.ml.find_patterns_async(self.db, project_type, description)
 
         result = self.claude.call_phase(
             phase=project.current_phase,
