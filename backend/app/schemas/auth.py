@@ -22,5 +22,6 @@ class UserPublic(BaseModel):
     id: str
     email: str
     name: str | None = None
+    plan: str = "starter"
 
     model_config = {"from_attributes": True}

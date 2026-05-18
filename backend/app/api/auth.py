@@ -45,4 +45,4 @@ async def login(payload: LoginRequest, db: DB) -> TokenResponse:
 
 @router.get("/me", response_model=UserPublic)
 async def me(user: CurrentUser) -> UserPublic:
-    return UserPublic(id=str(user.id), email=user.email, name=user.name)
+    return UserPublic(id=str(user.id), email=user.email, name=user.name, plan=user.plan)

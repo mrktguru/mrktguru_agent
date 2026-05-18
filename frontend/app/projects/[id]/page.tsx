@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { MindMap } from "@/components/viz/MindMap";
 import { FeatureBoard } from "@/components/viz/FeatureBoard";
+import { FlowDiagram } from "@/components/viz/FlowDiagram";
+import { ArchDiagram } from "@/components/viz/ArchDiagram";
 
 type Message = { role: "user" | "assistant"; content: string };
 
@@ -211,7 +213,16 @@ export default function ProjectPage() {
 
       <aside className="flex flex-col gap-4">
         {phase <= 1 && <MindMap spec={spec} />}
-        {phase === 2 && <FeatureBoard spec={spec} />}
+        {phase === 2 && (
+          <FeatureBoard spec={spec} projectId={projectId} onSpecChanged={setSpec} />
+        )}
+        {phase === 3 && (
+          <>
+            <FlowDiagram spec={spec} flow="user_flow" title="Пользовательский флоу" />
+            <FlowDiagram spec={spec} flow="admin_flow" title="Админ-флоу" />
+            <ArchDiagram spec={spec} />
+          </>
+        )}
         <div className="rounded-xl border border-gray-800 p-4">
           <div className="text-sm text-gray-400">Спецификация (JSON)</div>
           <pre className="mt-3 max-h-60 overflow-auto text-xs text-gray-300">

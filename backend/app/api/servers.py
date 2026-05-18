@@ -2,9 +2,10 @@
 import json
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.deps import CurrentUser, DB
+from app.core.plans import get_limits, within
 from app.core.security import decrypt_credentials, encrypt_credentials
 from app.models.server import Server
 from app.schemas.server import ServerCreate, ServerPublic, ServerScanResult
@@ -49,6 +50,13 @@ async def list_servers(user: CurrentUser, db: DB) -> list[ServerPublic]:
 
 @router.post("", response_model=ServerPublic, status_code=status.HTTP_201_CREATED)
 async def create_server(payload: ServerCreate, user: CurrentUser, db: DB) -> ServerPublic:
+    limits = get_limits(user.plan)
+    current = await db.scalar(select(func.count(Server.id)).where(Server.user_id == user.id))
+    if not within(limits["max_servers"], current or 0):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=f"Достигнут лимит серверов для тарифа '{user.plan}' ({limits['max_servers']})",
+        )
     creds: dict[str, str] = {}
     if payload.auth_type == "password":
         if not payload.password:

@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.database import AsyncSessionLocal
 from app.core.deps import CurrentUser, DB
+from app.core.plans import get_limits, within
 from app.core.security import decode_token
 from app.models.deploy_log import DeployLog
 from app.models.project import Project
@@ -25,6 +26,25 @@ async def trigger_deploy(project_id: str, user: CurrentUser, db: DB) -> dict[str
         raise HTTPException(status_code=404, detail="Project not found")
     if not project.server_id:
         raise HTTPException(status_code=400, detail="Project has no server assigned")
+
+    limits = get_limits(user.plan)
+    if limits["deploys_per_month"] >= 0:
+        since = datetime.now(timezone.utc) - timedelta(days=30)
+        used = await db.scalar(
+            select(func.count(DeployLog.id))
+            .join(Project, Project.id == DeployLog.project_id)
+            .where(
+                Project.user_id == user.id,
+                DeployLog.step == "init",
+                DeployLog.created_at >= since,
+            )
+        )
+        if not within(limits["deploys_per_month"], used or 0):
+            raise HTTPException(
+                status_code=402,
+                detail=f"Лимит деплоев на тарифе '{user.plan}' исчерпан ({limits['deploys_per_month']}/мес)",
+            )
+
     task = run_deploy.delay(str(project.id))
     return {"task_id": task.id, "status": "queued"}
 

@@ -14,3 +14,4 @@ class User(UUIDMixin, TimestampMixin, Base):
     google_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     timezone: Mapped[str] = mapped_column(String, default="UTC", nullable=False)
+    plan: Mapped[str] = mapped_column(String, default="starter", nullable=False)
