@@ -3,22 +3,28 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import bcrypt
 from cryptography.fernet import Fernet
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 # ----- Passwords -----------------------------------------------------------
 
+# bcrypt's max input length is 72 bytes; longer inputs are truncated explicitly.
+def _prepare(password: str) -> bytes:
+    return password.encode("utf-8")[:72]
+
+
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_prepare(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(_prepare(plain), hashed.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 # ----- JWT -----------------------------------------------------------------
