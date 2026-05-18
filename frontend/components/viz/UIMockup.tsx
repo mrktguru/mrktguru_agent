@@ -122,8 +122,6 @@ export function UIMockup({ spec, projectId, projectName, onDeploy }: UIMockupPro
   );
 }
 
-
-interface FlowStep {
   action?: string;
   label?: string;
   step?: string;
