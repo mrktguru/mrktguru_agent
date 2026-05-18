@@ -9,6 +9,7 @@ log writes and the sync part of SSHClient — keeps the worker simple.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import time
 import uuid
@@ -255,19 +256,48 @@ class ProjectDeployer:
             raise DeployError(f"docker compose up failed:\n{r.output}")
 
     def _step_nginx(self) -> None:
-        # Stub: real nginx config generation is project-type specific.
-        # For now, we just verify nginx is installed/available so deploy completes.
-        r = self._run("which nginx || which docker")
+        domain = self.project.domain
+        if not domain:
+            self._log("nginx", "success", "Пропущено (домен не задан)")
+            return
+
+        port = self._project_port()
+        config = _render_nginx_http(domain, port)
+        import base64
+
+        b64 = base64.b64encode(config.encode("utf-8")).decode("ascii")
+        site = f"/etc/nginx/sites-available/appforge-{self.project.id}"
+        link = f"/etc/nginx/sites-enabled/appforge-{self.project.id}"
+        cmd = (
+            f"which nginx >/dev/null 2>&1 || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx) && "
+            f"echo {shlex.quote(b64)} | base64 -d > {shlex.quote(site)} && "
+            f"ln -sf {shlex.quote(site)} {shlex.quote(link)} && "
+            f"nginx -t && systemctl reload nginx"
+        )
+        r = self._run(cmd, timeout=180)
         if not r.ok:
-            raise DeployError("Neither nginx nor docker found on server")
+            raise DeployError(f"nginx config failed:\n{r.output[-1500:]}")
 
     def _step_ssl(self) -> None:
-        # SSL provisioning is deferred until the project has a domain set.
-        if not self.project.domain:
+        domain = self.project.domain
+        if not domain:
             self._log("ssl", "success", "Пропущено (домен не задан)")
             return
-        # Real implementation would call certbot here.
-        self._log("ssl", "success", f"Домен {self.project.domain} зафиксирован")
+
+        email = f"admin@{domain}"
+        webroot = "/var/www/letsencrypt"
+        cmd = (
+            f"which certbot >/dev/null 2>&1 || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-nginx) && "
+            f"mkdir -p {shlex.quote(webroot)} && "
+            f"certbot --nginx --non-interactive --agree-tos --redirect "
+            f"-m {shlex.quote(email)} -d {shlex.quote(domain)}"
+        )
+        r = self._run(cmd, timeout=600)
+        if not r.ok:
+            # SSL failures shouldn't kill the deploy — log and continue.
+            self._log("ssl", "error", f"certbot failed:\n{r.output[-1500:]}")
+            return
+        self._log("ssl", "running", "certbot ok", raw=r.output[-1500:])
 
     def _step_verify(self) -> None:
         r = self._run(
@@ -277,8 +307,66 @@ class ProjectDeployer:
             raise DeployError(f"verify failed: {r.output}")
         self._log("verify", "running", "docker compose ps", raw=r.output[-2000:])
 
+        # Health check via the project's domain (if any) or the local port.
+        target = (
+            f"https://{self.project.domain}/" if self.project.domain
+            else f"http://127.0.0.1:{self._project_port()}/"
+        )
+        r = self._run(
+            f"curl -sk -o /dev/null -w '%{{http_code}}' --max-time 10 {shlex.quote(target)} || true"
+        )
+        code = (r.output or "").strip()
+        if code and code.startswith(("2", "3")):
+            self._log("verify", "running", f"HTTP {code} ← {target}")
+        else:
+            self._log("verify", "running", f"HTTP {code or '???'} ← {target} (предупреждение)")
+
+    # -------- helpers --------
+
+    def _project_port(self) -> int:
+        arch = (self.spec.get("architecture") or {}) if isinstance(self.spec, dict) else {}
+        for key in ("expose_port", "port", "public_port"):
+            val = arch.get(key)
+            if isinstance(val, int) and val > 0:
+                return val
+            if isinstance(val, str) and val.isdigit():
+                return int(val)
+        # heuristic: scan deploy_commands for `-p host:container`
+        for cmd in self.generated.get("deploy_commands", []):
+            m = re.search(r"-p\s+(\d+):", cmd)
+            if m:
+                return int(m.group(1))
+        return 8080
+
 
 def _now():
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc)
+
+
+_NGINX_HTTP_TEMPLATE = """server {{
+    listen 80;
+    server_name {domain};
+
+    location /.well-known/acme-challenge/ {{
+        root /var/www/letsencrypt;
+    }}
+
+    location / {{
+        proxy_pass http://127.0.0.1:{port};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+    }}
+}}
+"""
+
+
+def _render_nginx_http(domain: str, port: int) -> str:
+    return _NGINX_HTTP_TEMPLATE.format(domain=domain, port=port)

@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
+import { MindMap } from "@/components/viz/MindMap";
+import { FeatureBoard } from "@/components/viz/FeatureBoard";
 
 type Message = { role: "user" | "assistant"; content: string };
 
@@ -208,9 +210,11 @@ export default function ProjectPage() {
       </section>
 
       <aside className="flex flex-col gap-4">
+        {phase <= 1 && <MindMap spec={spec} />}
+        {phase === 2 && <FeatureBoard spec={spec} />}
         <div className="rounded-xl border border-gray-800 p-4">
-          <div className="text-sm text-gray-400">Текущая спецификация</div>
-          <pre className="mt-3 max-h-72 overflow-auto text-xs text-gray-300">
+          <div className="text-sm text-gray-400">Спецификация (JSON)</div>
+          <pre className="mt-3 max-h-60 overflow-auto text-xs text-gray-300">
 {spec ? JSON.stringify(spec, null, 2) : "—"}
           </pre>
         </div>

@@ -49,6 +49,18 @@ services:
     networks:
       - appforge
 
+  beat:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - redis
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_app.celery_app beat --loglevel=info
+    networks:
+      - appforge
+
   frontend:
     build: ./frontend
     restart: unless-stopped
