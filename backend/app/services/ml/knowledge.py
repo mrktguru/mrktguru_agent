@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.models.ml_pattern import MLPattern
+from app.services.ml.embeddings import embed_text, embed_text_sync
 
 
 def _action_for(frequency: float) -> str:
@@ -54,6 +55,20 @@ class MLKnowledgeBase:
     ) -> str:
         if not project_type:
             return ""
+        vec = await embed_text(description) if description else None
+        if vec is not None:
+            # Semantic search: pgvector cosine distance, scoped to overlapping type
+            stmt = (
+                select(MLPattern)
+                .where(MLPattern.project_type.overlap(array(project_type)))
+                .where(MLPattern.embedding.is_not(None))
+                .order_by(MLPattern.embedding.cosine_distance(vec))
+                .limit(limit)
+            )
+            rows = (await db.scalars(stmt)).all()
+            if rows:
+                return _format_patterns(rows)
+        # Fallback: overlap on project_type ordered by frequency
         stmt = (
             select(MLPattern)
             .where(MLPattern.project_type.overlap(array(project_type)))
@@ -118,6 +133,7 @@ class MLKnowledgeBase:
                 accepted_count=1 if accepted else 0,
                 rejected_count=0 if accepted else 1,
                 pattern_metadata={},
+                embedding=embed_text_sync(feature),
             )
             db.add(existing)
             return

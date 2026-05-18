@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # SSH
     PLATFORM_SSH_KEY_PATH: str = "/app/keys/platform_key"
 
+    # Google OAuth (optional)
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = ""  # e.g. https://mrktguru.ru/api/auth/google/callback
+
 
 @lru_cache
 def get_settings() -> Settings:

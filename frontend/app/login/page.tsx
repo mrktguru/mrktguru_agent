@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 
 export default function LoginPage() {
@@ -9,6 +9,15 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const params = useSearchParams();
+
+  useEffect(() => {
+    const token = params.get("token");
+    if (token) {
+      window.localStorage.setItem("token", token);
+      router.replace("/dashboard");
+    }
+  }, [params, router]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -47,6 +56,17 @@ export default function LoginPage() {
           Войти
         </button>
       </form>
+      <div className="my-4 flex items-center gap-3 text-xs text-gray-500">
+        <div className="h-px flex-1 bg-gray-800" />
+        или
+        <div className="h-px flex-1 bg-gray-800" />
+      </div>
+      <a
+        href="/api/auth/google/login"
+        className="block w-full rounded-md border border-gray-700 px-3 py-2 text-center font-medium hover:bg-gray-900"
+      >
+        Войти через Google
+      </a>
     </main>
   );
 }
