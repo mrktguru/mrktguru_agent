@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.project import Project
 from app.services.claude.client import ClaudeClient
 from app.services.ml.knowledge import MLKnowledgeBase
+from app.tasks.deploy import run_deploy
 
 
 def _merge_spec(current: dict[str, Any] | None, delta: dict[str, Any] | None) -> dict[str, Any]:
@@ -110,7 +111,13 @@ class AgentService:
                 reply = kickoff_reply
                 # ────────────────────────────────────────────────────────────
             else:
+                # Phase 4 complete: user confirmed → trigger deploy
                 project.status = "building"
+                if project.server_id:
+                    run_deploy.delay(str(project.id))
+                    reply = "🚀 Отлично! Код генерируется и деплоится на твой сервер. Следи за прогрессом в панели справа."
+                else:
+                    reply = "✅ Всё готово! Как только добавишь сервер в настройках — нажми «Задеплоить»."
 
         project.conversation_history = history
         project.spec = new_spec

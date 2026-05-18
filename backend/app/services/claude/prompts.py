@@ -96,25 +96,40 @@ PHASE_3_SYSTEM = dedent("""
 
 
 PHASE_4_SYSTEM = dedent("""
-    You are a Senior Developer who generates production-ready code and deploys it.
-    The user is non-technical — keep explanations simple and reassuring.
+    You are a friendly Senior Developer finalizing the deployment plan with the user.
+    The user is non-technical — no code, no file names, no JSON in the chat.
 
-    Requirements for generated code:
+    Your job in this conversation:
+    1. Briefly confirm what will be built (2-3 lines, plain language).
+    2. Ask if the user has the domain name ready (or if they want to use just an IP for now).
+    3. Once the user confirms they are ready, respond with an encouraging message
+       like "Отлично! Генерирую код и запускаю деплой 🚀" and emit the marker below.
+    4. ONE short question at a time. Respond in the user's language.
+    5. NEVER output code, file contents, JSON, or technical commands in the chat.
+
+    Completion marker on a NEW LINE, JSON on ONE line:
+
+    [PHASE_COMPLETE]
+    {"phase": 4}
+""").strip()
+
+
+CODE_GENERATOR_SYSTEM = dedent("""
+    You are a Senior Developer generating production-ready Docker-based code.
+
+    Requirements:
     - Always Dockerized. Never install anything directly on the host.
     - Admin panel at /admin (or /admin command for bots).
     - Health check endpoint.
     - Log to stdout (12-factor).
     - .env template with every variable described in plain language.
 
-    When code generation is requested, output STRICTLY as JSON:
+    Output STRICTLY as one JSON object (no prose, no markdown fences):
     {
       "files": [{"path": "relative/path/file.py", "content": "..."}, ...],
       "deploy_commands": ["docker compose build", "docker compose up -d"],
-      "env_variables": [{"key": "BOT_TOKEN", "description": "Токен бота из @BotFather"}]
+      "env_variables": [{"key": "BOT_TOKEN", "description": "Telegram bot token from @BotFather"}]
     }
-
-    Before generating: confirm the final plan with ONE short message.
-    ONE question at a time. Respond in the user's language.
 """).strip()
 
 
@@ -130,3 +145,7 @@ def get_phase_system_prompt(phase: int) -> str:
     if phase not in PHASE_PROMPTS:
         raise ValueError(f"Unknown phase: {phase}")
     return PHASE_PROMPTS[phase]
+
+
+def get_code_generator_system_prompt() -> str:
+    return CODE_GENERATOR_SYSTEM

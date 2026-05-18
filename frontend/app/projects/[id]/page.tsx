@@ -92,9 +92,21 @@ export default function ProjectPage() {
       const { data } = await api.post(`/api/agent/${projectId}/chat`, {
         message: userMsg.content,
       });
-      setMessages((m) => [...m, { role: "assistant", content: data.reply }]);
+      // Never render raw JSON code blocks that leaked from code generation
+      const safeReply = /^```json/i.test((data.reply ?? "").trim()) ? null : data.reply;
+      if (safeReply) {
+        setMessages((m) => [...m, { role: "assistant", content: safeReply }]);
+      }
+      const prevPhase = phase;
       setPhase(data.phase);
       setSpec(data.spec);
+      // Auto-open deploy stream when entering phase 4
+      if (data.phase === 4 && prevPhase < 4) {
+        setTimeout(connectDeployStream, 1500);
+      }
+      if (data.phase_complete && data.phase > 4) {
+        connectDeployStream();
+      }
     } catch (err: any) {
       setMessages((m) => [
         ...m,
@@ -178,19 +190,21 @@ export default function ProjectPage() {
               Напишите первое сообщение — расскажите идею проекта в свободной форме.
             </div>
           )}
-          {messages.map((m, i) => (
-            <div
-              key={i}
-              className={
-                m.role === "user"
-                  ? "ml-12 rounded-lg bg-indigo-500/10 p-3"
-                  : "mr-12 rounded-lg bg-gray-800/40 p-3"
-              }
-            >
-              <div className="text-xs text-gray-500">{m.role === "user" ? "Вы" : "Агент"}</div>
-              <div className="mt-1 whitespace-pre-wrap text-sm">{m.content}</div>
-            </div>
-          ))}
+          {messages
+            .filter((m) => !/^```json/i.test((m.content ?? "").trim()))
+            .map((m, i) => (
+              <div
+                key={i}
+                className={
+                  m.role === "user"
+                    ? "ml-12 rounded-lg bg-indigo-500/10 p-3"
+                    : "mr-12 rounded-lg bg-gray-800/40 p-3"
+                }
+              >
+                <div className="text-xs text-gray-500">{m.role === "user" ? "Вы" : "Агент"}</div>
+                <div className="mt-1 whitespace-pre-wrap text-sm">{m.content}</div>
+              </div>
+            ))}
           {loading && <div className="text-sm text-gray-500">Агент печатает…</div>}
           <div ref={endRef} />
         </div>

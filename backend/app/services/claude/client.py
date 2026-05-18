@@ -22,6 +22,35 @@ class ClaudeClient:
         self.client = anthropic.Anthropic(api_key=api_key or settings.ANTHROPIC_API_KEY)
         self.model = model or settings.CLAUDE_MODEL
 
+    def call_with_system(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        max_tokens: int = 8192,
+    ) -> dict[str, Any]:
+        """Direct call with a custom system prompt (no phase lookup)."""
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            messages=messages,
+        )
+        text = "".join(
+            block.text for block in response.content if getattr(block, "type", "") == "text"
+        )
+        usage = response.usage
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        return {
+            "content": text,
+            "usage": {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_read_tokens": cache_read,
+                "cache_write_tokens": cache_write,
+            },
+        }
+
     def call_phase(
         self,
         phase: int,
