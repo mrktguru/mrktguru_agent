@@ -80,6 +80,35 @@ class AgentService:
             if project.current_phase < 4:
                 project.current_phase += 1
                 phase_advanced = True
+
+                # ── Auto-kickoff: immediately open the next phase ──────────
+                # Add a synthetic nudge so Claude knows to greet and start
+                # asking — the user should never see a dead end after confirmation.
+                kickoff_history = list(history) + [
+                    {"role": "user", "content": "Отлично, продолжай!"}
+                ]
+                spec_text_new = json.dumps(new_spec, ensure_ascii=False, indent=2)
+                ml_text_kickoff = ""
+                if project.current_phase == 2:
+                    project_type = ((new_spec or {}).get("idea") or {}).get("type") or []
+                    if isinstance(project_type, str):
+                        project_type = [project_type]
+                    description = ((new_spec or {}).get("idea") or {}).get("description") or user_message
+                    ml_text_kickoff = await self.ml.find_patterns_async(
+                        self.db, project_type, description
+                    )
+                kickoff = self.claude.call_phase(
+                    phase=project.current_phase,
+                    conversation_history=kickoff_history,
+                    ml_patterns_text=ml_text_kickoff,
+                    current_spec_text=spec_text_new,
+                )
+                kickoff_reply = kickoff["content"]
+                # Append the synthetic user nudge + kickoff reply to real history
+                history.append({"role": "user", "content": "Отлично, продолжай!"})
+                history.append({"role": "assistant", "content": kickoff_reply})
+                reply = kickoff_reply
+                # ────────────────────────────────────────────────────────────
             else:
                 project.status = "building"
 

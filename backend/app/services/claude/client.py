@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.services.claude.prompts import get_phase_system_prompt
 
 _PHASE_COMPLETE_RE = re.compile(
-    r"\[PHASE_COMPLETE\]\s*(\{.*?\})\s*$", re.DOTALL
+    r"\[PHASE_COMPLETE\]\s*(\{.*\})\s*$", re.DOTALL
 )
 
 
@@ -93,7 +93,11 @@ def _extract_phase_complete(text: str) -> tuple[bool, dict | None, str]:
     match = _PHASE_COMPLETE_RE.search(text)
     if not match:
         return False, None, text
-    raw_json = match.group(1)
+    raw_json = match.group(1).strip()
+    # Strip markdown code fences if Claude wrapped the JSON
+    if raw_json.startswith("```"):
+        raw_json = re.sub(r"^```[a-z]*\n?", "", raw_json)
+        raw_json = re.sub(r"\n?```$", "", raw_json).strip()
     try:
         spec_delta = json.loads(raw_json)
     except json.JSONDecodeError:
