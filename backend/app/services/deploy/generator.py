@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from app.services.claude.client import ClaudeClient
-from app.services.claude.prompts import get_code_generator_system_prompt
+from app.services.llm.registry import resolve
 
 _JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -37,13 +37,13 @@ class CodeGenerator:
         self.claude = claude or ClaudeClient()
 
     def generate(self, spec: dict[str, Any]) -> dict[str, Any]:
-        system_prompt = get_code_generator_system_prompt()
-        result = self.claude.call_with_system(
-            system=system_prompt,
+        layer = resolve("code_gen")
+        claude = ClaudeClient(model=layer.model)
+        result = claude.call_with_system(
+            system=layer.system_prompt,
             messages=[{"role": "user", "content": _build_user_request(spec)}],
-            max_tokens=8192,
+            max_tokens=layer.max_tokens,
         )
-        data = _extract_json(result["content"])
         data = _extract_json(result["content"])
 
         files = data.get("files") or []

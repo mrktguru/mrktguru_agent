@@ -12,35 +12,9 @@ from app.models.site import Site
 from app.models.task import Task
 from app.models.task_log import TaskLog
 from app.services.claude.client import ClaudeClient
+from app.services.llm.registry import resolve
 from app.services.ssh.backup import BackupManager
 from app.services.ssh.client import SSHClient
-
-_EXECUTOR_SYSTEM = """Ты senior веб-разработчик специализирующийся на редактировании существующих сайтов.
-
-Правила (СТРОГО):
-1. Минимальные изменения — правь только то, что просят
-2. Никогда не удаляй существующий CSS/JS, только добавляй или точечно заменяй
-3. Всегда сохраняй валидный синтаксис файла после правки
-4. Возвращай ТОЛЬКО JSON без пояснений
-
-Формат ответа:
-{
-  "plan": "краткое описание что именно сделаешь",
-  "changes": [
-    {
-      "file": "/полный/путь/к/файлу.css",
-      "action": "append|replace|create",
-      "find": "точный текст для замены (только для action=replace)",
-      "content": "новый или добавляемый контент"
-    }
-  ],
-  "post_commands": ["nginx -s reload", "php-fpm restart"],
-  "verify_url": "https://site.ru/страница-для-проверки"
-}
-
-Для action=replace: find должен быть уникальным фрагментом из файла, content — замена.
-Для action=append: content добавляется в конец файла.
-Для action=create: создаётся новый файл с content."""
 
 _SUPPORTED_CMS_RELOAD = {
     "wordpress": ["wp cache flush 2>/dev/null || true"],
@@ -63,7 +37,6 @@ class TaskExecutor:
         self._task = task
         self._ssh = ssh
         self._log = log_callback or self._default_log
-        self._claude = ClaudeClient()
         self._backup = BackupManager(ssh)
 
     def execute(self) -> None:
@@ -178,10 +151,12 @@ class TaskExecutor:
             )},
         ]
 
-        result = self._claude.call_with_system(
-            system=_EXECUTOR_SYSTEM,
+        layer = resolve("task_executor")
+        claude = ClaudeClient(model=layer.model)
+        result = claude.call_with_system(
+            system=layer.system_prompt,
             messages=messages,
-            max_tokens=4096,
+            max_tokens=layer.max_tokens,
         )
         return self._parse_plan(result["content"])
 

@@ -10,7 +10,7 @@ type Site = {
   uptime_percent: number | null; created_at: string;
 };
 
-type User = { name: string | null; email: string; plan: string; token_credits: number };
+type User = { name: string | null; email: string; plan: string; token_credits: number; is_admin?: boolean };
 
 const CMS_BADGE: Record<string, string> = {
   wordpress: "bg-blue-50 text-blue-600 border-blue-100",
@@ -118,6 +118,20 @@ export default function DashboardPage() {
             </button>
           </div>
         </nav>
+
+        {/* Admin button */}
+        {user?.is_admin && (
+          <button
+            onClick={() => router.push("/admin")}
+            className="mx-3 mb-1 flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-text-sub hover:bg-surface-2 hover:text-text-main transition-colors"
+          >
+            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" className="flex-shrink-0">
+              <circle cx="7.5" cy="7.5" r="2.5" stroke="currentColor" strokeWidth="1.3"/>
+              <path d="M7.5 1v2M7.5 12v2M1 7.5h2M12 7.5h2M3 3l1.4 1.4M10.6 10.6L12 12M12 3l-1.4 1.4M4.4 10.6L3 12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+            Админка
+          </button>
+        )}
 
         {/* User */}
         {user && (

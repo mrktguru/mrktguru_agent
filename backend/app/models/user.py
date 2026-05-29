@@ -15,3 +15,4 @@ class User(UUIDMixin, TimestampMixin, Base):
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     timezone: Mapped[str] = mapped_column(String, default="UTC", nullable=False)
     plan: Mapped[str] = mapped_column(String, default="starter", nullable=False)
+    is_admin: Mapped[bool] = mapped_column(default=False, nullable=False)

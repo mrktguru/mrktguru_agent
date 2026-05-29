@@ -6,21 +6,9 @@ import re
 from typing import Any
 
 from app.services.claude.client import ClaudeClient
+from app.services.llm.registry import resolve
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-_SYSTEM = (
-    "You are a senior DevOps engineer fixing a failed deploy step on a Linux server. "
-    "You receive: the failing step name, the captured error output, the project spec, "
-    "and basic server info. Respond with STRICTLY one JSON object: "
-    '{"commands": ["sh cmd 1", "sh cmd 2"], "explanation": "what & why"}. '
-    "Rules:\n"
-    "- Commands run as root over SSH, non-interactively. No sudo prompts.\n"
-    "- Never destroy unrelated containers, networks or data.\n"
-    "- Prefer minimal, idempotent commands (mkdir -p, apt-get install -y, etc.).\n"
-    "- If the error is unrecoverable, return an empty commands array.\n"
-    "- No prose outside the JSON object."
-)
 
 
 def suggest_fix(
@@ -36,14 +24,15 @@ def suggest_fix(
         f"Project spec:\n{json.dumps(spec, ensure_ascii=False)[:4000]}\n\n"
         f"Server info:\n{json.dumps(server_info or {}, ensure_ascii=False)[:2000]}"
     )
-    client = ClaudeClient()
+    layer = resolve("auto_fix")
+    client = ClaudeClient(model=layer.model)
     msg = client.client.messages.create(
         model=client.model,
-        max_tokens=1024,
+        max_tokens=layer.max_tokens,
         system=[
             {
                 "type": "text",
-                "text": _SYSTEM,
+                "text": layer.system_prompt,
                 "cache_control": {"type": "ephemeral"},
             }
         ],

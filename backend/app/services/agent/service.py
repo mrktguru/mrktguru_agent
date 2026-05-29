@@ -64,11 +64,16 @@ class AgentService:
             description = ((project.spec or {}).get("idea") or {}).get("description") or user_message
             ml_text = await self.ml.find_patterns_async(self.db, project_type, description)
 
+        from app.services.llm.registry import resolve
+        layer = resolve(f"phase_{project.current_phase}")
         result = self.claude.call_phase(
             phase=project.current_phase,
             conversation_history=history,
             ml_patterns_text=ml_text,
             current_spec_text=spec_text,
+            max_tokens=layer.max_tokens,
+            system_prompt=layer.system_prompt,
+            model=layer.model,
         )
 
         reply = result["content"]

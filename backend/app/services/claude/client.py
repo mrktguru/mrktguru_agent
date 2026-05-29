@@ -58,16 +58,21 @@ class ClaudeClient:
         ml_patterns_text: str = "",
         current_spec_text: str = "",
         max_tokens: int = 4096,
+        system_prompt: str | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         """Call the agent for the given phase.
 
         Static blocks (system prompt, ML patterns, current spec snapshot) are
         marked with cache_control: {"type": "ephemeral"} for caching savings.
+
+        `system_prompt` / `model` override the per-phase defaults (used by the
+        admin-configurable LLM layer registry).
         """
         system_blocks: list[dict[str, Any]] = [
             {
                 "type": "text",
-                "text": get_phase_system_prompt(phase),
+                "text": system_prompt or get_phase_system_prompt(phase),
                 "cache_control": {"type": "ephemeral"},
             }
         ]
@@ -89,7 +94,7 @@ class ClaudeClient:
             )
 
         response = self.client.messages.create(
-            model=self.model,
+            model=model or self.model,
             max_tokens=max_tokens,
             system=system_blocks,
             messages=conversation_history,

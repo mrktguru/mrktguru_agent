@@ -50,7 +50,15 @@ async def login(payload: LoginRequest, db: DB) -> TokenResponse:
 
 @router.get("/me", response_model=UserPublic)
 async def me(user: CurrentUser) -> UserPublic:
-    return UserPublic(id=str(user.id), email=user.email, name=user.name, plan=user.plan)
+    return UserPublic(
+        id=str(user.id),
+        email=user.email,
+        name=user.name,
+        plan=user.plan,
+        token_credits=getattr(user, "token_credits", 0.0) or 0.0,
+        token_credits_monthly=getattr(user, "token_credits_monthly", 0.0) or 0.0,
+        is_admin=getattr(user, "is_admin", False),
+    )
 
 
 # ---------- Google OAuth ----------

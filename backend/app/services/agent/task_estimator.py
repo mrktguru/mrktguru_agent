@@ -8,54 +8,29 @@ import uuid
 from app.models.site import Site
 from app.models.task import Task
 from app.services.claude.client import ClaudeClient
-
-_ESTIMATOR_SYSTEM = """Ты senior веб-разработчик. Твоя задача — проанализировать техническое задание (ТЗ) для сайта и разбить его на конкретные подзадачи.
-
-Правила:
-- Каждая подзадача = одно атомарное изменение (один файл или один логический блок)
-- Для каждой подзадачи определи: какие файлы нужно трогать, сложность, риск
-- Стоимость 1 кредита ≈ 1000 токенов Claude + 1 SSH операция
-- Типичные задачи: CSS правка = 2-5 кредитов, JS функция = 5-15 кредитов, новая страница = 15-30 кредитов
-- Риск: low = CSS/текст, medium = JS/шаблоны, high = БД/конфиги/core файлы
-
-Всегда отвечай строго JSON, без пояснений:
-{
-  "title": "краткое название ТЗ (до 80 символов)",
-  "subtasks": [
-    {
-      "id": "st_1",
-      "title": "Выровнять баннеры по сетке",
-      "description": "Добавить CSS grid-gap: 0 и выровнять flex-контейнер",
-      "files_to_touch": ["/var/www/html/wp-content/themes/martfury/css/custom.css"],
-      "estimated_credits": 3,
-      "risk": "low"
-    }
-  ],
-  "total_credits": 30,
-  "confidence": "high",
-  "estimated_minutes": 15
-}"""
+from app.services.llm.registry import resolve
 
 
 class TaskEstimator:
     def __init__(self, site: Site, task: Task) -> None:
         self._site = site
         self._task = task
-        self._claude = ClaudeClient()
 
     async def estimate(self) -> dict:
         site_context = self._build_site_context()
         user_message = self._build_user_message()
 
-        result = self._claude.call_with_system(
-            system=_ESTIMATOR_SYSTEM,
+        layer = resolve("task_estimator")
+        claude = ClaudeClient(model=layer.model)
+        result = claude.call_with_system(
+            system=layer.system_prompt,
             messages=[
                 # Site context as assistant pre-fill to enable caching
                 {"role": "user", "content": site_context},
                 {"role": "assistant", "content": "Понял контекст сайта. Жду ваше ТЗ."},
                 {"role": "user", "content": user_message},
             ],
-            max_tokens=4096,
+            max_tokens=layer.max_tokens,
         )
 
         return self._parse_response(result["content"])

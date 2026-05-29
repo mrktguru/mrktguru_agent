@@ -114,18 +114,20 @@ async def generate_mockup(
 ) -> dict[str, str]:
     """Generate an AI HTML prototype and store it in spec.mockup.html."""
     from app.services.claude.client import ClaudeClient
-    from app.services.claude.prompts import MOCKUP_SYSTEM, get_mockup_prompt
+    from app.services.claude.prompts import get_mockup_prompt
+    from app.services.llm.registry import resolve
 
     project = await db.get(Project, project_id)
     if not project or project.user_id != user.id:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    claude = ClaudeClient()
+    layer = resolve("mockup")
+    claude = ClaudeClient(model=layer.model)
     prompt = get_mockup_prompt(project.spec or {}, project.name)
     result = claude.call_with_system(
-        system=MOCKUP_SYSTEM,
+        system=layer.system_prompt,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=8000,
+        max_tokens=layer.max_tokens,
     )
     html: str = result["content"]
     # Strip accidental markdown fences if present
