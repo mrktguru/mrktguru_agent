@@ -16,14 +16,9 @@ type ScanResult = {
 export default function ConnectSitePage() {
   const router = useRouter();
   const [form, setForm] = useState({
-    name: "",
-    url: "",
-    ssh_host: "",
-    ssh_port: "22",
-    ssh_user: "root",
+    name: "", url: "", ssh_host: "", ssh_port: "22", ssh_user: "root",
     auth_type: "password" as "password" | "platform_key",
-    password: "",
-    private_key: "",
+    password: "", private_key: "",
   });
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -39,21 +34,17 @@ export default function ConnectSitePage() {
     setLoading(true);
     try {
       const { data } = await api.post<{ id: string }>("/api/sites", {
-        name: form.name,
-        url: form.url || undefined,
-        ssh_host: form.ssh_host,
-        ssh_port: parseInt(form.ssh_port) || 22,
-        ssh_user: form.ssh_user,
-        auth_type: form.auth_type,
+        name: form.name, url: form.url || undefined,
+        ssh_host: form.ssh_host, ssh_port: parseInt(form.ssh_port) || 22,
+        ssh_user: form.ssh_user, auth_type: form.auth_type,
         password: form.auth_type === "password" ? form.password : undefined,
         private_key: form.auth_type === "platform_key" ? form.private_key : undefined,
       });
       setSiteId(data.id);
-      // Auto-scan after creation
+      setLoading(false);
       setScanning(true);
       const { data: scan } = await api.post<ScanResult>(`/api/sites/${data.id}/scan`);
       setScanResult(scan);
-      setScanning(false);
     } catch (err: any) {
       setError(err?.response?.data?.detail || "Ошибка подключения");
     } finally {
@@ -62,165 +53,151 @@ export default function ConnectSitePage() {
     }
   }
 
+  const INFO_ROWS = scanResult ? [
+    { label: "CMS", value: [scanResult.cms, scanResult.cms_version].filter(Boolean).join(" ") },
+    { label: "PHP", value: scanResult.php_version },
+    { label: "Web-сервер", value: scanResult.web_server },
+    { label: "ОС", value: scanResult.server_os },
+    { label: "Корень сайта", value: scanResult.site_root_path, mono: true },
+  ].filter((r) => r.value) : [];
+
   if (scanResult && siteId) {
     return (
-      <main className="mx-auto max-w-lg px-6 py-12">
-        <h1 className="text-2xl font-semibold mb-6">✅ Сайт подключён</h1>
-        <div className="rounded-lg border border-gray-700 p-4 space-y-2 text-sm">
-          {scanResult.cms && (
-            <div className="flex justify-between">
-              <span className="text-gray-400">CMS</span>
-              <span>{scanResult.cms} {scanResult.cms_version || ""}</span>
+      <main className="min-h-screen flex items-center justify-center px-6">
+        <div className="w-full max-w-sm">
+          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-9 h-9 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M3 8L6.5 11.5L13 5" stroke="#10b981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </div>
+              <div>
+                <p className="font-semibold text-text-main">Сайт подключён</p>
+                <p className="text-xs text-text-muted">CMS определена</p>
+              </div>
             </div>
-          )}
-          {scanResult.php_version && (
-            <div className="flex justify-between">
-              <span className="text-gray-400">PHP</span>
-              <span>{scanResult.php_version}</span>
+
+            <div className="bg-surface-2 rounded-xl border border-border divide-y divide-border overflow-hidden mb-5">
+              {INFO_ROWS.map((r) => (
+                <div key={r.label} className="flex items-center justify-between px-3.5 py-2.5">
+                  <span className="text-xs text-text-sub">{r.label}</span>
+                  <span className={`text-xs font-medium text-text-main ${r.mono ? "font-mono" : ""}`}>{r.value}</span>
+                </div>
+              ))}
             </div>
-          )}
-          {scanResult.web_server && (
-            <div className="flex justify-between">
-              <span className="text-gray-400">Web-сервер</span>
-              <span>{scanResult.web_server}</span>
-            </div>
-          )}
-          {scanResult.server_os && (
-            <div className="flex justify-between">
-              <span className="text-gray-400">ОС</span>
-              <span>{scanResult.server_os}</span>
-            </div>
-          )}
-          {scanResult.site_root_path && (
-            <div className="flex justify-between">
-              <span className="text-gray-400">Корневая папка</span>
-              <span className="font-mono text-xs">{scanResult.site_root_path}</span>
-            </div>
-          )}
+
+            <button
+              onClick={() => router.push(`/site/${siteId}`)}
+              className="w-full bg-accent hover:bg-accent-hover text-white rounded-xl py-2.5 text-sm font-medium transition-colors"
+            >
+              Перейти к сайту →
+            </button>
+          </div>
         </div>
-        <button
-          onClick={() => router.push(`/site/${siteId}`)}
-          className="mt-6 w-full rounded-md bg-accent py-2 text-white font-medium"
-        >
-          Открыть сайт →
-        </button>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-lg px-6 py-12">
-      <button
-        className="text-sm text-gray-500 hover:text-white mb-6"
-        onClick={() => router.push("/dashboard")}
-      >
-        ← Назад
-      </button>
-      <h1 className="text-2xl font-semibold mb-6">Подключить сайт</h1>
-
-      <form onSubmit={handleConnect} className="space-y-4">
-        {/* Site info */}
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Название сайта *</label>
-          <input
-            className="w-full rounded-md border border-gray-700 bg-transparent px-3 py-2 text-sm"
-            placeholder="Мой интернет-магазин"
-            value={form.name}
-            onChange={(e) => set("name", e.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">URL сайта</label>
-          <input
-            className="w-full rounded-md border border-gray-700 bg-transparent px-3 py-2 text-sm"
-            placeholder="https://example.ru"
-            value={form.url}
-            onChange={(e) => set("url", e.target.value)}
-          />
-        </div>
-
-        {/* SSH */}
-        <div className="border-t border-gray-800 pt-4">
-          <div className="text-sm text-gray-400 mb-3">SSH доступ</div>
-          <div className="flex gap-2">
-            <div className="flex-1">
-              <label className="block text-xs text-gray-500 mb-1">Хост</label>
-              <input
-                className="w-full rounded-md border border-gray-700 bg-transparent px-3 py-2 text-sm"
-                placeholder="185.100.50.1"
-                value={form.ssh_host}
-                onChange={(e) => set("ssh_host", e.target.value)}
-                required
-              />
-            </div>
-            <div className="w-20">
-              <label className="block text-xs text-gray-500 mb-1">Порт</label>
-              <input
-                className="w-full rounded-md border border-gray-700 bg-transparent px-3 py-2 text-sm"
-                value={form.ssh_port}
-                onChange={(e) => set("ssh_port", e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="mt-2">
-            <label className="block text-xs text-gray-500 mb-1">Логин</label>
-            <input
-              className="w-full rounded-md border border-gray-700 bg-transparent px-3 py-2 text-sm"
-              value={form.ssh_user}
-              onChange={(e) => set("ssh_user", e.target.value)}
-            />
-          </div>
-        </div>
-
-        {/* Auth type */}
-        <div>
-          <div className="flex gap-4 text-sm mb-2">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                checked={form.auth_type === "password"}
-                onChange={() => set("auth_type", "password")}
-              />
-              Пароль
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                checked={form.auth_type === "platform_key"}
-                onChange={() => set("auth_type", "platform_key")}
-              />
-              SSH-ключ
-            </label>
-          </div>
-          {form.auth_type === "password" ? (
-            <input
-              type="password"
-              className="w-full rounded-md border border-gray-700 bg-transparent px-3 py-2 text-sm"
-              placeholder="Пароль SSH"
-              value={form.password}
-              onChange={(e) => set("password", e.target.value)}
-            />
-          ) : (
-            <textarea
-              className="w-full rounded-md border border-gray-700 bg-transparent px-3 py-2 text-sm font-mono h-28"
-              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
-              value={form.private_key}
-              onChange={(e) => set("private_key", e.target.value)}
-            />
-          )}
-        </div>
-
-        {error && <div className="text-red-400 text-sm">{error}</div>}
-
-        <button
-          type="submit"
-          disabled={loading || scanning}
-          className="w-full rounded-md bg-accent py-2 text-white font-medium disabled:opacity-50"
-        >
-          {loading ? "Подключаю..." : scanning ? "Сканирую CMS..." : "Подключить и сканировать"}
+    <main className="min-h-screen flex items-center justify-center px-6">
+      <div className="w-full max-w-sm">
+        <button onClick={() => router.push("/dashboard")} className="flex items-center gap-1 text-sm text-text-muted hover:text-text-main mb-6 transition-colors">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M9 11L5 7L9 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Назад
         </button>
-      </form>
+
+        <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
+          <h1 className="text-xl font-semibold text-text-main mb-5">Подключить сайт</h1>
+
+          <form onSubmit={handleConnect} className="space-y-4">
+            {/* Site info */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-text-sub mb-1.5">Название *</label>
+                <input className="input" placeholder="Мой интернет-магазин" value={form.name} onChange={(e) => set("name", e.target.value)} required />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-text-sub mb-1.5">URL сайта</label>
+                <input className="input" placeholder="https://example.ru" value={form.url} onChange={(e) => set("url", e.target.value)} />
+              </div>
+            </div>
+
+            {/* SSH */}
+            <div className="border-t border-border pt-4 space-y-3">
+              <p className="text-xs font-medium text-text-sub">SSH доступ</p>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="block text-xs text-text-muted mb-1">Хост</label>
+                  <input className="input" placeholder="185.100.50.1" value={form.ssh_host} onChange={(e) => set("ssh_host", e.target.value)} required />
+                </div>
+                <div className="w-20">
+                  <label className="block text-xs text-text-muted mb-1">Порт</label>
+                  <input className="input" value={form.ssh_port} onChange={(e) => set("ssh_port", e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Логин</label>
+                <input className="input" value={form.ssh_user} onChange={(e) => set("ssh_user", e.target.value)} />
+              </div>
+            </div>
+
+            {/* Auth */}
+            <div className="space-y-2">
+              <div className="flex gap-3 text-sm">
+                {(["password", "platform_key"] as const).map((t) => (
+                  <label key={t} className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" checked={form.auth_type === t} onChange={() => set("auth_type", t)} className="accent-accent" />
+                    <span className="text-text-sub text-xs">{t === "password" ? "Пароль" : "SSH-ключ"}</span>
+                  </label>
+                ))}
+              </div>
+              {form.auth_type === "password" ? (
+                <input type="password" className="input" placeholder="Пароль SSH" value={form.password} onChange={(e) => set("password", e.target.value)} />
+              ) : (
+                <textarea className="input font-mono h-24 resize-none text-xs" placeholder={"-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"} value={form.private_key} onChange={(e) => set("private_key", e.target.value)} />
+              )}
+            </div>
+
+            {error && (
+              <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2"/><path d="M7 4.5V7.5M7 9.5V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                {error}
+              </div>
+            )}
+
+            <button type="submit" disabled={loading || scanning} className="w-full bg-accent hover:bg-accent-hover disabled:opacity-50 text-white rounded-xl py-2.5 text-sm font-medium transition-colors">
+              {loading ? "Подключаю..." : scanning ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="white" strokeWidth="1.5" strokeDasharray="20 14"/></svg>
+                  Сканирую CMS...
+                </span>
+              ) : "Подключить и сканировать"}
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <style jsx global>{`
+        .input {
+          width: 100%;
+          border-radius: 12px;
+          border: 1px solid #e8eaed;
+          background: #f5f6f8;
+          padding: 10px 14px;
+          font-size: 13px;
+          color: #111827;
+          transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .input::placeholder { color: #9ca3af; }
+        .input:focus {
+          border-color: #6366f1;
+          box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
+          background: #fff;
+        }
+      `}</style>
     </main>
   );
 }

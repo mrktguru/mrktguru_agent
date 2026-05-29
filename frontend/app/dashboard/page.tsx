@@ -23,13 +23,13 @@ type User = {
   token_credits: number;
 };
 
-const CMS_COLORS: Record<string, string> = {
-  wordpress: "bg-blue-900 text-blue-200",
-  joomla: "bg-orange-900 text-orange-200",
-  bitrix: "bg-red-900 text-red-200",
-  laravel: "bg-pink-900 text-pink-200",
-  opencart: "bg-green-900 text-green-200",
-  custom: "bg-gray-700 text-gray-200",
+const CMS_BADGE: Record<string, { label: string; color: string }> = {
+  wordpress: { label: "WordPress", color: "bg-blue-50 text-blue-600 border-blue-100" },
+  joomla:    { label: "Joomla",    color: "bg-orange-50 text-orange-600 border-orange-100" },
+  bitrix:    { label: "Битрикс",   color: "bg-red-50 text-red-600 border-red-100" },
+  laravel:   { label: "Laravel",   color: "bg-pink-50 text-pink-600 border-pink-100" },
+  opencart:  { label: "OpenCart",  color: "bg-green-50 text-green-600 border-green-100" },
+  custom:    { label: "Custom",    color: "bg-gray-100 text-gray-500 border-gray-200" },
 };
 
 export default function DashboardPage() {
@@ -37,9 +37,7 @@ export default function DashboardPage() {
   const [user, setUser] = useState<User | null>(null);
   const router = useRouter();
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
   async function load() {
     try {
@@ -54,113 +52,146 @@ export default function DashboardPage() {
     }
   }
 
-  const uptimeColor = (u: number | null) => {
-    if (u === null) return "text-gray-500";
-    if (u >= 99) return "text-green-400";
-    if (u >= 95) return "text-yellow-400";
-    return "text-red-400";
-  };
+  const scoreColor = (s: number | null) =>
+    s === null ? "text-text-muted" : s >= 80 ? "text-emerald-600" : s >= 60 ? "text-amber-500" : "text-red-500";
 
-  const scoreColor = (s: number | null) => {
-    if (s === null) return "text-gray-500";
-    if (s >= 80) return "text-green-400";
-    if (s >= 60) return "text-yellow-400";
-    return "text-red-400";
-  };
+  const uptimeColor = (u: number | null) =>
+    u === null ? "text-text-muted" : u >= 99 ? "text-emerald-600" : u >= 95 ? "text-amber-500" : "text-red-500";
 
   return (
-    <main className="mx-auto max-w-4xl px-6 py-12">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-2">
-        <h1 className="text-2xl font-semibold">Мои сайты</h1>
+    <div className="min-h-screen bg-surface-2">
+      {/* Top nav */}
+      <header className="bg-surface border-b border-border px-6 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
+            </svg>
+          </div>
+          <span className="font-semibold text-sm text-text-main">SiteDoc</span>
+        </div>
+
         <div className="flex items-center gap-4">
           {user && (
-            <div className="text-sm text-gray-400">
-              <span className="text-white font-medium">{(user.token_credits ?? 0).toFixed(0)}</span>
-              {" "}кредитов · {user.plan}
+            <div className="flex items-center gap-3 text-sm">
+              <div className="flex items-center gap-1.5 bg-accent/8 text-accent px-3 py-1 rounded-full">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
+                  <path d="M6 3.5V6.5L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                </svg>
+                <span className="font-medium">{(user.token_credits ?? 0).toFixed(0)}</span>
+                <span className="text-accent/60">кред.</span>
+              </div>
+              <span className="text-text-muted text-xs">{user.email}</span>
             </div>
           )}
           <button
-            className="text-sm text-gray-400 hover:text-white"
-            onClick={() => {
-              window.localStorage.removeItem("token");
-              router.push("/");
-            }}
+            onClick={() => { localStorage.removeItem("token"); router.push("/"); }}
+            className="text-xs text-text-muted hover:text-text-main transition-colors"
           >
             Выйти
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Add site button */}
-      <div className="mt-6">
-        <button
-          onClick={() => router.push("/site/connect")}
-          className="rounded-md border border-dashed border-gray-600 px-4 py-2 text-sm text-gray-400 hover:border-accent hover:text-white transition-colors"
-        >
-          + Добавить сайт
-        </button>
-      </div>
+      <div className="max-w-4xl mx-auto px-6 py-8">
+        {/* Page title + action */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-xl font-semibold text-text-main">Мои сайты</h1>
+            <p className="text-sm text-text-muted mt-0.5">{sites.length} подключено</p>
+          </div>
+          <button
+            onClick={() => router.push("/site/connect")}
+            className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 2V12M2 7H12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+            Добавить сайт
+          </button>
+        </div>
 
-      {/* Sites list */}
-      <div className="mt-6 space-y-3">
-        {sites.length === 0 && (
-          <div className="text-gray-500 mt-8 text-center">
-            Нет подключённых сайтов — добавьте первый.
+        {/* Sites grid */}
+        {sites.length === 0 ? (
+          <div className="bg-surface rounded-2xl border border-dashed border-border p-12 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-surface-3 flex items-center justify-center mx-auto mb-4">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <rect x="2" y="3" width="16" height="14" rx="3" stroke="#9ca3af" strokeWidth="1.4"/>
+                <path d="M2 7H18" stroke="#9ca3af" strokeWidth="1.4"/>
+                <circle cx="5" cy="5" r="1" fill="#9ca3af"/>
+                <circle cx="8" cy="5" r="1" fill="#9ca3af"/>
+              </svg>
+            </div>
+            <p className="text-text-sub font-medium mb-1">Нет подключённых сайтов</p>
+            <p className="text-sm text-text-muted mb-4">Добавьте первый сайт, чтобы начать</p>
+            <button
+              onClick={() => router.push("/site/connect")}
+              className="text-sm text-accent hover:underline font-medium"
+            >
+              Подключить сайт →
+            </button>
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {sites.map((s) => {
+              const cms = CMS_BADGE[s.cms || ""] || CMS_BADGE.custom;
+              return (
+                <a
+                  key={s.id}
+                  href={`/site/${s.id}`}
+                  className="group bg-surface rounded-2xl border border-border hover:border-accent/30 hover:shadow-card-hover p-5 transition-all"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      {/* Status + name */}
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          s.status === "active" ? "bg-emerald-400" :
+                          s.status === "error" ? "bg-red-400" : "bg-amber-400"
+                        }`} />
+                        <span className="font-medium text-text-main truncate">{s.name}</span>
+                      </div>
+                      {s.url && <p className="text-xs text-text-muted truncate mb-3">{s.url}</p>}
+
+                      {/* Badges */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {s.cms && (
+                          <span className={`text-xs px-2 py-0.5 rounded-lg border font-medium ${cms.color}`}>
+                            {cms.label}{s.cms_version ? ` ${s.cms_version}` : ""}
+                          </span>
+                        )}
+                        {s.web_server && (
+                          <span className="text-xs px-2 py-0.5 rounded-lg border border-border bg-surface-2 text-text-sub">
+                            {s.web_server}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Stats */}
+                    <div className="text-right flex-shrink-0 space-y-1">
+                      {s.uptime_percent !== null && (
+                        <p className={`text-xs font-medium ${uptimeColor(s.uptime_percent)}`}>
+                          {s.uptime_percent.toFixed(1)}%
+                        </p>
+                      )}
+                      {s.audit_score !== null && (
+                        <p className={`text-xs ${scoreColor(s.audit_score)}`}>
+                          {s.audit_score}/100
+                        </p>
+                      )}
+                      <div className="text-xs text-text-muted group-hover:text-accent transition-colors mt-2">
+                        Открыть →
+                      </div>
+                    </div>
+                  </div>
+                </a>
+              );
+            })}
           </div>
         )}
-        {sites.map((s) => (
-          <a
-            key={s.id}
-            href={`/site/${s.id}`}
-            className="block rounded-lg border border-gray-800 p-4 hover:border-accent transition-colors"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                {/* Status dot + name */}
-                <div className="flex items-center gap-2">
-                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                    s.status === "active" ? "bg-green-400" :
-                    s.status === "error" ? "bg-red-400" : "bg-yellow-400"
-                  }`} />
-                  <span className="font-medium truncate">{s.name}</span>
-                </div>
-                {/* URL */}
-                {s.url && (
-                  <div className="mt-1 text-xs text-gray-500 truncate">{s.url}</div>
-                )}
-                {/* Badges */}
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {s.cms && (
-                    <span className={`text-xs px-2 py-0.5 rounded ${CMS_COLORS[s.cms] || CMS_COLORS.custom}`}>
-                      {s.cms}{s.cms_version ? ` ${s.cms_version}` : ""}
-                    </span>
-                  )}
-                  {s.web_server && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-400">
-                      {s.web_server}
-                    </span>
-                  )}
-                </div>
-              </div>
-              {/* Stats */}
-              <div className="text-right text-sm flex-shrink-0">
-                {s.uptime_percent !== null && (
-                  <div className={uptimeColor(s.uptime_percent)}>
-                    {s.uptime_percent.toFixed(1)}% uptime
-                  </div>
-                )}
-                {s.audit_score !== null && (
-                  <div className={`text-xs mt-1 ${scoreColor(s.audit_score)}`}>
-                    Аудит {s.audit_score}/100
-                  </div>
-                )}
-                <div className="text-xs text-gray-600 mt-1">Открыть →</div>
-              </div>
-            </div>
-          </a>
-        ))}
       </div>
-    </main>
+    </div>
   );
 }
