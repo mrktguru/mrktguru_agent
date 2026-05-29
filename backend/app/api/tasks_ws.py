@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
@@ -14,12 +14,12 @@ from app.models.task_log import TaskLog
 
 ws_router = APIRouter()
 
+TERMINAL = {"done", "failed", "rolled_back"}
+
 
 @ws_router.websocket("/ws/tasks/{task_id}")
-async def task_logs_ws(websocket, task_id: str, token: str | None = None) -> None:
+async def task_logs_ws(websocket: WebSocket, task_id: str, token: str | None = None) -> None:
     """Stream task execution logs. Auth via ?token=JWT."""
-    from fastapi.websockets import WebSocketDisconnect
-
     payload = decode_token(token) if token else None
     if not payload or "sub" not in payload:
         await websocket.close(code=4401)
@@ -30,7 +30,7 @@ async def task_logs_ws(websocket, task_id: str, token: str | None = None) -> Non
     last_seen_at: datetime | None = None
 
     try:
-        # Send existing logs + verify ownership
+        # ── 1. Verify ownership & send all existing logs immediately ─────────
         async with AsyncSessionLocal() as db:
             task = await db.get(Task, task_id)
             if not task or str(task.user_id) != user_id:
@@ -39,7 +39,9 @@ async def task_logs_ws(websocket, task_id: str, token: str | None = None) -> Non
                 return
 
             rows = (await db.scalars(
-                select(TaskLog).where(TaskLog.task_id == task.id).order_by(TaskLog.created_at)
+                select(TaskLog)
+                .where(TaskLog.task_id == task.id)
+                .order_by(TaskLog.created_at)
             )).all()
             for row in rows:
                 await websocket.send_json(_serialize(row))
@@ -47,10 +49,16 @@ async def task_logs_ws(websocket, task_id: str, token: str | None = None) -> Non
 
             terminal_status = task.status
 
-        # Poll until task reaches terminal state
-        while terminal_status not in {"done", "failed", "rolled_back"}:
-            await asyncio.sleep(0.5)
+        # If task already finished before WS connected → send complete immediately
+        if terminal_status in TERMINAL:
+            await websocket.send_json({"type": "task_complete", "status": terminal_status})
+            return
+
+        # ── 2. Poll for new logs until terminal state ─────────────────────────
+        while True:
+            await asyncio.sleep(0.4)
             async with AsyncSessionLocal() as db:
+                # New logs
                 stmt = (
                     select(TaskLog)
                     .where(TaskLog.task_id == task.id)
@@ -63,17 +71,22 @@ async def task_logs_ws(websocket, task_id: str, token: str | None = None) -> Non
                     await websocket.send_json(_serialize(row))
                     last_seen_at = row.created_at
 
-                task = await db.get(Task, task_id)
-                terminal_status = task.status if task else "failed"
+                # Check task status
+                refreshed = await db.get(Task, task_id)
+                terminal_status = refreshed.status if refreshed else "failed"
 
-        await websocket.send_json({"type": "task_complete", "status": terminal_status})
+            if terminal_status in TERMINAL:
+                await websocket.send_json({"type": "task_complete", "status": terminal_status})
+                break
 
+    except WebSocketDisconnect:
+        pass
     except Exception:
         pass
     finally:
         try:
             await websocket.close()
-        except RuntimeError:
+        except Exception:
             pass
 
 

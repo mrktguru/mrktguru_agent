@@ -458,45 +458,102 @@ export default function SitePage() {
               )}
 
               {(stage === "running" || stage === "done") && (
-                <div className="max-w-2xl mx-auto">
-                  <div className="bg-surface rounded-2xl border border-border shadow-card overflow-hidden">
-                    <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+                <div className="max-w-2xl mx-auto space-y-3">
+                  {/* Status header */}
+                  <div className="flex gap-3">
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${stage === "done" && taskStatus === "done" ? "bg-emerald-100" : stage === "done" ? "bg-red-100" : "bg-accent/10"}`}>
                       {stage === "running" ? (
-                        <>
-                          <svg className="animate-spin text-accent" width="14" height="14" viewBox="0 0 14 14" fill="none">
-                            <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20 14"/>
-                          </svg>
-                          <span className="text-sm font-medium text-text-main">Выполняю задачи...</span>
-                        </>
+                        <svg className="animate-spin text-accent" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                          <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20 14"/>
+                        </svg>
+                      ) : taskStatus === "done" ? (
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                          <path d="M2.5 7L6 10.5L11.5 4" stroke="#10b981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
                       ) : (
-                        <>
-                          <span className={`text-sm font-medium ${taskStatus === "done" ? "text-emerald-600" : "text-red-500"}`}>
-                            {taskStatus === "done" ? "✓ Все задачи выполнены" : "✗ Завершено с ошибками"}
-                          </span>
-                        </>
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                          <path d="M4 4L10 10M10 4L4 10" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round"/>
+                        </svg>
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <p className={`text-sm font-semibold ${stage === "running" ? "text-text-main" : taskStatus === "done" ? "text-emerald-700" : "text-red-600"}`}>
+                        {stage === "running" ? "Выполняю задачи..." : taskStatus === "done" ? "Все задачи выполнены" : "Завершено с ошибками"}
+                      </p>
+                      <p className="text-xs text-text-muted mt-0.5">
+                        {stage === "running" ? `${logs.length} шагов выполнено` : `${logs.filter(l => l.status === "success").length} успешно · ${logs.filter(l => l.status === "error").length} ошибок`}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Log terminal */}
+                  <div className="bg-gray-950 rounded-2xl overflow-hidden">
+                    {/* Terminal header */}
+                    <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-white/5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-500/60"/>
+                      <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/60"/>
+                      <span className="w-2.5 h-2.5 rounded-full bg-green-500/60"/>
+                      <span className="ml-2 text-xs text-white/30">выполнение задач</span>
+                      {stage === "running" && (
+                        <span className="ml-auto flex items-center gap-1 text-xs text-white/30">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>
+                          live
+                        </span>
                       )}
                     </div>
 
-                    <div className="px-4 py-3 font-mono text-xs space-y-1 max-h-80 overflow-y-auto">
+                    {/* Log lines */}
+                    <div className="px-4 py-3 font-mono text-xs space-y-1.5 max-h-72 overflow-y-auto">
+                      {logs.length === 0 && stage === "running" && (
+                        <div className="flex items-center gap-2 text-white/30">
+                          <svg className="animate-spin" width="10" height="10" viewBox="0 0 10 10" fill="none">
+                            <circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1.2" strokeDasharray="12 8"/>
+                          </svg>
+                          <span>подключаюсь к серверу...</span>
+                        </div>
+                      )}
                       {logs.map((log, i) => (
-                        <div key={i} className={`flex items-start gap-2 ${LOG_COLOR[log.status] || "text-text-sub"}`}>
-                          <span className="flex-shrink-0 w-3 text-center">{LOG_ICON[log.status] || "·"}</span>
-                          <span>{log.message}</span>
+                        <div key={i} className={`flex items-start gap-2 leading-relaxed ${
+                          log.status === "success" ? "text-emerald-400" :
+                          log.status === "error" ? "text-red-400" :
+                          log.status === "rollback" ? "text-yellow-400" :
+                          log.message?.startsWith("━━━") ? "text-white/80 mt-2" :
+                          "text-white/50"
+                        }`}>
+                          <span className="flex-shrink-0 select-none">
+                            {log.status === "success" ? "✓" :
+                             log.status === "error" ? "✗" :
+                             log.status === "rollback" ? "↩" :
+                             log.message?.startsWith("━━━") ? "▶" : "·"}
+                          </span>
+                          <span className="break-all">{log.message}</span>
                         </div>
                       ))}
+                      {stage === "running" && logs.length > 0 && (
+                        <div className="flex items-center gap-1 text-white/20 mt-1">
+                          <span className="animate-pulse">█</span>
+                        </div>
+                      )}
                     </div>
-
-                    {stage === "done" && (
-                      <div className="px-4 py-3 border-t border-border flex gap-2">
-                        <button onClick={handleRollback} className="text-sm text-text-sub border border-border px-3 py-1.5 rounded-xl hover:bg-surface-2 transition-colors">
-                          ↩ Откатить
-                        </button>
-                        <button onClick={resetAll} className="text-sm text-white bg-accent hover:bg-accent-hover px-4 py-1.5 rounded-xl transition-colors">
-                          Новая задача
-                        </button>
-                      </div>
-                    )}
                   </div>
+
+                  {/* Done actions */}
+                  {stage === "done" && (
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={handleRollback}
+                        className="text-sm text-text-sub border border-border px-3 py-1.5 rounded-xl hover:bg-surface-2 transition-colors"
+                      >
+                        ↩ Откатить изменения
+                      </button>
+                      <button
+                        onClick={resetAll}
+                        className="text-sm text-white bg-accent hover:bg-accent-hover px-4 py-1.5 rounded-xl transition-colors"
+                      >
+                        Новая задача
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
