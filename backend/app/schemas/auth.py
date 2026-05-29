@@ -23,5 +23,7 @@ class UserPublic(BaseModel):
     email: str
     name: str | None = None
     plan: str = "starter"
+    token_credits: float = 0.0
+    token_credits_monthly: float = 0.0
 
     model_config = {"from_attributes": True}

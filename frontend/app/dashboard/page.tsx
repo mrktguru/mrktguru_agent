@@ -76,7 +76,7 @@ export default function DashboardPage() {
         <div className="flex items-center gap-4">
           {user && (
             <div className="text-sm text-gray-400">
-              <span className="text-white font-medium">{user.token_credits.toFixed(0)}</span>
+              <span className="text-white font-medium">{(user.token_credits ?? 0).toFixed(0)}</span>
               {" "}кредитов · {user.plan}
             </div>
           )}
