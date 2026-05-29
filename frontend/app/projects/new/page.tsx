@@ -134,7 +134,7 @@ export default function NewProjectPage() {
         ssh_port: portNum,
         ssh_user: form.user,
         auth_type: authType,
-        password: ["password", "ftp"].includes(form.connectMethod) ? form.password : undefined,
+        password: ["ssh_password", "ftp"].includes(form.connectMethod) ? form.password : undefined,
         private_key: ["ssh_key", "sftp"].includes(form.connectMethod) ? form.privateKey : undefined,
       });
 
