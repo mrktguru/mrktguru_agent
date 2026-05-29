@@ -38,6 +38,14 @@ class Site(UUIDMixin, TimestampMixin, Base):
     file_structure: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     installed_plugins: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Docker info (filled after scan)
+    is_docker: Mapped[bool | None] = mapped_column(nullable=True)
+    docker_compose_dir: Mapped[str | None] = mapped_column(String, nullable=True)
+    docker_service_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    docker_container_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    framework: Mapped[str | None] = mapped_column(String, nullable=True)  # nextjs|react|vue|laravel|...
+    needs_rebuild: Mapped[bool | None] = mapped_column(nullable=True)
+
     # Audit results
     audit_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     audit_report: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

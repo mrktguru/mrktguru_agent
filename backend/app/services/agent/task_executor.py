@@ -98,21 +98,24 @@ class TaskExecutor:
             applied_files.append(filepath)
             self._log(f"  ✅ {filepath}", "success", idx)
 
-        # Step 5: Post-commands (nginx reload, cache flush, etc.)
+        # Step 5: Post-commands from Claude plan + CMS cache flush
         post_cmds = plan.get("post_commands", [])
-        # Add CMS-specific cache flush
         cms_cmds = _SUPPORTED_CMS_RELOAD.get(self._site.cms or "", [])
         for cmd in (post_cmds + cms_cmds):
             self._log(f"  🔄 {cmd}", "running", idx)
-            rc, out, err = self._ssh.run(cmd, timeout=30)
+            rc, out, err = self._ssh.run(cmd, timeout=60)
             if rc != 0 and err:
-                self._log(f"  ⚠ {err.strip()[:100]}", "running", idx)
+                self._log(f"  ⚠ {err.strip()[:120]}", "running", idx)
 
-        # Step 6: Verify site is still up
+        # Step 6: Docker rebuild (if site runs in a container)
+        if getattr(self._site, "is_docker", False) and getattr(self._site, "needs_rebuild", False):
+            self._docker_rebuild(idx)
+
+        # Step 7: Verify site is still up
         if self._site.url:
             self._log("🔍 Проверяю сайт...", "running", idx)
             rc, out, _ = self._ssh.run(
-                f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 {self._site.url}", timeout=20
+                f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 15 {self._site.url}", timeout=25
             )
             code = out.strip()
             if code.startswith("2") or code.startswith("3"):
@@ -121,6 +124,51 @@ class TaskExecutor:
                 raise RuntimeError(f"Сайт вернул {code} после правок — откатываю")
 
         return applied_files
+
+    def _docker_rebuild(self, subtask_index: int | None = None) -> None:
+        """Rebuild and restart the Docker service after source file changes."""
+        compose_dir = getattr(self._site, "docker_compose_dir", None)
+        service = getattr(self._site, "docker_service_name", None)
+
+        if not compose_dir:
+            self._log("⚠ Docker compose dir не определён, перезапуск пропущен", "running", subtask_index)
+            return
+
+        self._log(f"🐳 Пересобираю Docker-контейнер ({service or 'все сервисы'})...", "running", subtask_index)
+
+        # Build only the specific service if known, otherwise all
+        build_target = service or ""
+        rc, out, err = self._ssh.run(
+            f"cd {compose_dir} && docker compose build {build_target} 2>&1 | tail -5",
+            timeout=300,  # build can take a while
+        )
+        if rc != 0:
+            self._log(f"⚠ Сборка: {(out or err or '').strip()[-200:]}", "running", subtask_index)
+            raise RuntimeError(f"docker compose build failed: {(err or out or '')[-300:]}")
+
+        self._log("🐳 Перезапускаю контейнер...", "running", subtask_index)
+        rc, out, err = self._ssh.run(
+            f"cd {compose_dir} && docker compose up -d {build_target} 2>&1 | tail -5",
+            timeout=120,
+        )
+        if rc != 0:
+            raise RuntimeError(f"docker compose up failed: {(err or out or '')[-300:]}")
+
+        self._log(f"✅ Контейнер перезапущен", "success", subtask_index)
+
+        # Wait for service to be healthy
+        import time
+        self._log("⏳ Жду запуска сервиса...", "running", subtask_index)
+        for attempt in range(12):  # up to 60s
+            time.sleep(5)
+            if self._site.url:
+                rc, code, _ = self._ssh.run(
+                    f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 {self._site.url}", timeout=10
+                )
+                if code.strip().startswith(("2", "3")):
+                    self._log(f"✅ Сервис готов", "success", subtask_index)
+                    return
+        self._log("⚠ Сервис долго стартует, проверьте вручную", "running", subtask_index)
 
     def _read_files(self, files: list[str]) -> dict[str, str]:
         contents = {}

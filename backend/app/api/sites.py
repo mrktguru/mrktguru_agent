@@ -148,10 +148,17 @@ async def scan_site(site_id: str, user: CurrentUser, db: DB) -> SiteScanResult:
     site.site_root_path = info.get("site_root_path")
     site.file_structure = info.get("file_structure")
     site.installed_plugins = info.get("installed_plugins")
+    # Docker fields
+    site.is_docker = info.get("is_docker", False)
+    site.docker_compose_dir = info.get("docker_compose_dir")
+    site.docker_service_name = info.get("docker_service_name")
+    site.docker_container_name = info.get("docker_container_name")
+    site.framework = info.get("framework")
+    site.needs_rebuild = info.get("needs_rebuild", False)
     site.status = "active"
     await db.commit()
 
-    return SiteScanResult(**info)
+    return SiteScanResult(**{k: v for k, v in info.items() if k in SiteScanResult.model_fields})
 
 
 # ─── Tasks ───────────────────────────────────────────────────────────────────

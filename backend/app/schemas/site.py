@@ -42,14 +42,20 @@ class SitePublic(BaseModel):
 
 
 class SiteScanResult(BaseModel):
-    cms: str | None
-    cms_version: str | None
-    php_version: str | None
-    web_server: str | None
-    server_os: str | None
-    site_root_path: str | None
-    file_structure: dict[str, Any] | None
-    installed_plugins: dict[str, Any] | None
+    cms: str | None = None
+    cms_version: str | None = None
+    php_version: str | None = None
+    web_server: str | None = None
+    server_os: str | None = None
+    site_root_path: str | None = None
+    file_structure: dict[str, Any] | None = None
+    installed_plugins: dict[str, Any] | None = None
+    # Docker info
+    is_docker: bool | None = None
+    docker_compose_dir: str | None = None
+    docker_service_name: str | None = None
+    framework: str | None = None
+    needs_rebuild: bool | None = None
 
 
 class TaskCreate(BaseModel):

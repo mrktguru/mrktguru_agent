@@ -245,18 +245,27 @@ EXECUTOR_SYSTEM = dedent("""\
     3. Всегда сохраняй валидный синтаксис файла после правки
     4. Возвращай ТОЛЬКО JSON без пояснений
 
+    ВАЖНО для Docker/Next.js/React/Vue сайтов:
+    - Редактируй ИСХОДНЫЕ файлы (src/, app/, components/), НЕ файлы в dist/, build/, .next/
+    - Для Next.js: правь .tsx/.ts/.css в src/ или app/, не трогай .next/
+    - Для React/Vite: правь .jsx/.tsx/.css в src/, не трогай dist/
+    - После правки исходников система автоматически запустит docker compose build
+    - Для Next.js CSS: ищи tailwind классы в TSX-файлах или globals.css / tailwind.config
+    - Для изменения цвета кнопок в Tailwind: найди className с bg-* и замени цвет
+    - post_commands для Docker-сайтов: оставь пустым — rebuild делается автоматически
+
     Формат ответа:
     {
       "plan": "краткое описание что именно сделаешь",
       "changes": [
         {
-          "file": "/полный/путь/к/файлу.css",
+          "file": "/полный/путь/к/исходному/файлу.tsx",
           "action": "append|replace|create",
           "find": "точный текст для замены (только для action=replace)",
           "content": "новый или добавляемый контент"
         }
       ],
-      "post_commands": ["nginx -s reload", "php-fpm restart"],
+      "post_commands": [],
       "verify_url": "https://site.ru/страница-для-проверки"
     }
 

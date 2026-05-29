@@ -1,4 +1,10 @@
-"""SiteScanner — detects CMS, PHP version, web server, site root, and file structure."""
+"""SiteScanner — detects CMS, PHP, web server, site root, and file structure.
+
+Layer 1 improvement: Docker-aware scanning.
+- Detects if site runs inside a Docker container
+- Finds the source code directory (not dist/build artifacts)
+- Stores docker_compose_dir + container_name for post-edit rebuild
+"""
 from __future__ import annotations
 
 import re
@@ -7,36 +13,49 @@ from app.services.ssh.client import SSHClient
 
 
 class SiteScanner:
-    """Wraps SSHClient with site-level (not server-level) scanning logic."""
+    """Wraps SSHClient with site-level scanning logic."""
 
     def __init__(self, ssh: SSHClient) -> None:
         self._ssh = ssh
 
     def scan(self) -> dict:
-        """Return a dict with cms, cms_version, php_version, web_server, server_os,
-        site_root_path, file_structure, installed_plugins."""
         result: dict = {}
-
         result["server_os"] = self._get_os()
         result["php_version"] = self._get_php_version()
         result["web_server"] = self._get_web_server()
-        result["site_root_path"] = self._get_site_root()
-        cms, cms_version = self._detect_cms(result.get("site_root_path", ""))
+
+        # ── Docker detection (must happen before site_root) ────────────────
+        docker_info = self._detect_docker()
+        result.update(docker_info)
+
+        # ── Site root ──────────────────────────────────────────────────────
+        if docker_info.get("is_docker"):
+            site_root = docker_info.get("source_path", "") or self._get_site_root()
+        else:
+            site_root = self._get_site_root()
+
+        result["site_root_path"] = site_root
+
+        # ── CMS ────────────────────────────────────────────────────────────
+        cms, cms_version = self._detect_cms(site_root)
         result["cms"] = cms
         result["cms_version"] = cms_version
-        result["file_structure"] = self._get_file_structure(result.get("site_root_path", ""))
-        result["installed_plugins"] = self._get_plugins(cms, result.get("site_root_path", ""))
 
+        result["file_structure"] = self._get_file_structure(site_root)
+        result["installed_plugins"] = self._get_plugins(cms, site_root)
         return result
 
-    # ------------------------------------------------------------------ helpers
+    # ── helpers ─────────────────────────────────────────────────────────────
 
-    def _run(self, cmd: str) -> str:
-        _, stdout, _ = self._ssh.run(cmd, timeout=30)
+    def _run(self, cmd: str, timeout: int = 30) -> str:
+        _, stdout, _ = self._ssh.run(cmd, timeout=timeout)
         return stdout.strip()
 
     def _get_os(self) -> str:
-        return self._run("lsb_release -d 2>/dev/null | cut -f2 || cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'")
+        return self._run(
+            "lsb_release -d 2>/dev/null | cut -f2 || "
+            "cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'"
+        )
 
     def _get_php_version(self) -> str:
         out = self._run("php --version 2>/dev/null | head -1 || echo ''")
@@ -46,105 +65,267 @@ class SiteScanner:
         return m.group(1) if m else out[:20]
 
     def _get_web_server(self) -> str:
-        # Check running processes
         nginx = self._run("nginx -v 2>&1 | head -1 || echo ''")
         if nginx and "nginx" in nginx.lower():
             m = re.search(r"(\d+\.\d+\.\d+)", nginx)
             return f"nginx {m.group(1)}" if m else "nginx"
-        apache = self._run("apache2 -v 2>/dev/null | head -1 || apachectl -v 2>/dev/null | head -1 || echo ''")
+        apache = self._run(
+            "apache2 -v 2>/dev/null | head -1 || apachectl -v 2>/dev/null | head -1 || echo ''"
+        )
         if apache and "apache" in apache.lower():
             m = re.search(r"(\d+\.\d+\.\d+)", apache)
             return f"apache {m.group(1)}" if m else "apache"
         return "unknown"
 
+    # ── Docker detection ─────────────────────────────────────────────────────
+
+    def _detect_docker(self) -> dict:
+        """Detect Docker-based sites and find their source directories."""
+        result: dict = {
+            "is_docker": False,
+            "docker_compose_dir": None,
+            "docker_container_name": None,
+            "docker_service_name": None,
+            "source_path": None,
+            "framework": None,       # nextjs | react | vue | nuxt | laravel | ...
+            "needs_rebuild": False,
+        }
+
+        docker_ok = self._run("docker ps --format '{{.Names}}' 2>/dev/null | head -1 || echo ''")
+        if not docker_ok:
+            return result
+
+        result["is_docker"] = True
+
+        # 1. Find all docker-compose.yml files on the server
+        compose_dirs = self._run(
+            "find /root /home /srv /opt -name 'docker-compose.yml' -not -path '*/node_modules/*' "
+            "2>/dev/null | head -20"
+        ).splitlines()
+
+        best_dir = None
+        best_score = -1
+        found_container = None
+        found_service = None
+        found_source = None
+        found_framework = None
+
+        for compose_path in compose_dirs:
+            compose_path = compose_path.strip()
+            if not compose_path:
+                continue
+            compose_dir = compose_path.rsplit("/", 1)[0]
+            score, container, service, source, framework = self._score_compose(compose_dir)
+            if score > best_score:
+                best_score = score
+                best_dir = compose_dir
+                found_container = container
+                found_service = service
+                found_source = source
+                found_framework = framework
+
+        if best_dir and best_score >= 0:
+            result["docker_compose_dir"] = best_dir
+            result["docker_container_name"] = found_container
+            result["docker_service_name"] = found_service
+            result["source_path"] = found_source
+            result["framework"] = found_framework
+            result["needs_rebuild"] = found_framework in (
+                "nextjs", "react", "vue", "nuxt", "vite", "angular"
+            )
+
+        return result
+
+    def _score_compose(self, compose_dir: str) -> tuple[int, str | None, str | None, str | None, str | None]:
+        """Score a docker-compose dir: return (score, container, service, source_path, framework)."""
+        # Read compose file to find web-like services
+        compose_content = self._run(f"cat {compose_dir}/docker-compose.yml 2>/dev/null | head -200")
+        if not compose_content:
+            return -1, None, None, None, None
+
+        # Extract service names from compose
+        services = re.findall(r"^  (\w[\w-]*):\s*$", compose_content, re.MULTILINE)
+
+        best_service = None
+        best_source = None
+        best_framework = None
+        best_score = -1
+
+        for service in services:
+            # Skip infra services
+            if any(x in service.lower() for x in ["db", "postgres", "redis", "mysql", "mongo", "minio", "rabbit"]):
+                continue
+
+            # Find running container for this service
+            project = compose_dir.split("/")[-1].replace("-", "_").replace(" ", "_")
+            container_name = self._run(
+                f"docker ps --format '{{{{.Names}}}}' | grep -E '^({project}-{service}-|{project}_{service}_)' | head -1 || echo ''"
+            )
+            if not container_name:
+                continue
+
+            # Detect framework from container
+            framework, source = self._detect_framework_in_container(container_name, compose_dir)
+            score = self._framework_score(framework)
+            if score > best_score:
+                best_score = score
+                best_service = service
+                best_source = source
+                best_framework = framework
+
+        return best_score, None, best_service, best_source, best_framework
+
+    def _detect_framework_in_container(self, container: str, compose_dir: str) -> tuple[str, str]:
+        """Detect framework and source path for a container."""
+        # Check package.json inside container
+        pkg = self._run(f"docker exec {container} cat /app/package.json 2>/dev/null || "
+                        f"docker exec {container} cat /usr/src/app/package.json 2>/dev/null || echo ''")
+        if pkg:
+            framework = self._parse_framework_from_pkg(pkg)
+            # Source path: look for mounted src/ in compose_dir
+            src_path = self._find_source_in_compose_dir(compose_dir, container)
+            return framework, src_path or compose_dir
+
+        # Check if it's PHP/Laravel
+        artisan = self._run(f"docker exec {container} test -f /var/www/artisan && echo yes || echo no 2>/dev/null")
+        if artisan == "yes":
+            src_path = self._find_source_in_compose_dir(compose_dir, container)
+            return "laravel", src_path or compose_dir
+
+        # Check if it's WordPress
+        wp = self._run(f"docker exec {container} test -f /var/www/html/wp-config.php && echo yes || echo no 2>/dev/null")
+        if wp == "yes":
+            return "wordpress", compose_dir
+
+        return "unknown", compose_dir
+
+    def _parse_framework_from_pkg(self, pkg_json: str) -> str:
+        pkg_lower = pkg_json.lower()
+        if '"next"' in pkg_lower:
+            return "nextjs"
+        if '"nuxt"' in pkg_lower:
+            return "nuxt"
+        if '"@angular/core"' in pkg_lower:
+            return "angular"
+        if '"vue"' in pkg_lower:
+            return "vue"
+        if '"react"' in pkg_lower:
+            return "react"
+        if '"vite"' in pkg_lower:
+            return "vite"
+        return "node"
+
+    def _find_source_in_compose_dir(self, compose_dir: str, container: str) -> str | None:
+        """Find source code directory — prefer src/ over dist/build."""
+        # Look for src/ directory with source files
+        candidates = [
+            f"{compose_dir}/src",
+            f"{compose_dir}/app",
+        ]
+        # Also look in subdirs (e.g. /root/cvguru/apps/cvguru/web/)
+        subdirs = self._run(
+            f"find {compose_dir} -maxdepth 4 -name 'package.json' "
+            f"-not -path '*/node_modules/*' -not -path '*/dist/*' 2>/dev/null"
+        ).splitlines()
+        for pkg_path in subdirs:
+            pkg_path = pkg_path.strip()
+            if pkg_path:
+                candidates.insert(0, pkg_path.rsplit("/", 1)[0])
+
+        for path in candidates:
+            exists = self._run(f"[ -d '{path}' ] && echo yes || echo no")
+            if exists == "yes":
+                # Prefer directories with src/ or app/ inside them
+                has_src = self._run(f"[ -d '{path}/src' ] || [ -d '{path}/app' ] && echo yes || echo no")
+                if has_src == "yes":
+                    return path
+                return path
+        return None
+
+    def _framework_score(self, framework: str) -> int:
+        scores = {
+            "nextjs": 10, "nuxt": 9, "react": 8, "vue": 8,
+            "vite": 7, "angular": 7, "laravel": 6,
+            "node": 3, "wordpress": 5, "unknown": 0,
+        }
+        return scores.get(framework, 0)
+
+    # ── Site root (non-Docker fallback) ───────────────────────────────────────
+
     def _get_site_root(self) -> str:
-        """Try to find site root from nginx/apache config, fall back to common paths."""
-        # Try nginx
         nginx_root = self._run(
             "nginx -T 2>/dev/null | grep -E '^\\s*root ' | head -1 | awk '{print $2}' | tr -d ';' || echo ''"
         )
-        if nginx_root and nginx_root != "":
+        if nginx_root:
             return nginx_root
-
-        # Try apache
         apache_root = self._run(
             "apache2ctl -S 2>/dev/null | grep DocumentRoot | head -1 | awk '{print $2}' || echo ''"
         )
-        if apache_root and apache_root != "":
+        if apache_root:
             return apache_root
-
-        # Common locations
-        for path in ["/var/www/html", "/var/www/site", "/var/www/public_html", "/srv/www/htdocs"]:
-            exists = self._run(f"[ -d '{path}' ] && echo yes || echo no")
-            if exists == "yes":
+        for path in ["/var/www/html", "/var/www/site", "/var/www/public_html"]:
+            if self._run(f"[ -d '{path}' ] && echo yes || echo no") == "yes":
                 return path
-
         return "/var/www/html"
+
+    # ── CMS ───────────────────────────────────────────────────────────────────
 
     def _detect_cms(self, root: str) -> tuple[str, str]:
         if not root:
             return "unknown", ""
-
-        # WordPress
-        wp_config = self._run(f"[ -f '{root}/wp-config.php' ] && echo yes || echo no")
-        if wp_config == "yes":
+        if self._run(f"[ -f '{root}/wp-config.php' ] && echo yes || echo no") == "yes":
             version = self._run(
-                f"grep -r '\\$wp_version\\|wp_version' {root}/wp-includes/version.php 2>/dev/null | grep -oP \"'[0-9.]+'\"|head -1|tr -d \"'\""
-            )
-            # Try WP CLI
+                f"grep -r '\\$wp_version' {root}/wp-includes/version.php 2>/dev/null | "
+                f"grep -oP \"'[0-9.]+'\"|head -1|tr -d \"'\"")
             if not version:
                 version = self._run(f"wp --path='{root}' core version 2>/dev/null || echo ''")
             return "wordpress", version or ""
-
-        # Joomla
-        joomla = self._run(f"[ -f '{root}/configuration.php' ] && [ -d '{root}/administrator' ] && echo yes || echo no")
-        if joomla == "yes":
-            version = self._run(
-                f"cat {root}/libraries/cms/version/version.php 2>/dev/null | grep RELEASE | head -1 | grep -oP \"'[0-9.]+'\"|tr -d \"'\" || echo ''"
-            )
-            return "joomla", version or ""
-
-        # Bitrix
-        bitrix = self._run(f"[ -d '{root}/bitrix' ] && echo yes || echo no")
-        if bitrix == "yes":
+        if self._run(f"[ -f '{root}/configuration.php' ] && [ -d '{root}/administrator' ] && echo yes || echo no") == "yes":
+            return "joomla", ""
+        if self._run(f"[ -d '{root}/bitrix' ] && echo yes || echo no") == "yes":
             return "bitrix", ""
-
-        # Laravel
-        artisan = self._run(f"[ -f '{root}/artisan' ] && echo yes || echo no")
-        if artisan == "yes":
+        if self._run(f"[ -f '{root}/artisan' ] && echo yes || echo no") == "yes":
             return "laravel", ""
-
-        # OpenCart
-        opencart = self._run(f"[ -f '{root}/config.php' ] && grep -q 'opencart' {root}/config.php 2>/dev/null && echo yes || echo no")
-        if opencart == "yes":
+        if self._run(f"[ -f '{root}/config.php' ] && grep -q 'opencart' {root}/config.php 2>/dev/null && echo yes || echo no") == "yes":
             return "opencart", ""
-
+        # Check for Next.js / React in source
+        if self._run(f"[ -f '{root}/next.config.ts' ] || [ -f '{root}/next.config.js' ] && echo yes || echo no") == "yes":
+            return "nextjs", ""
+        if self._run(f"[ -f '{root}/package.json' ] && echo yes || echo no") == "yes":
+            pkg = self._run(f"cat {root}/package.json 2>/dev/null | head -30")
+            if '"next"' in pkg:
+                return "nextjs", ""
+            if '"vue"' in pkg:
+                return "vue", ""
+            if '"react"' in pkg:
+                return "react", ""
         return "custom", ""
+
+    # ── File structure ─────────────────────────────────────────────────────────
 
     def _get_file_structure(self, root: str) -> dict:
         if not root:
             return {}
-        # Get top-level dirs and key files (depth 3, max 200 entries)
         out = self._run(
-            f"find '{root}' -maxdepth 3 \\( -name '*.php' -o -name '*.js' -o -name '*.css' -o -type d \\) "
+            f"find '{root}' -maxdepth 4 "
+            f"\\( -name '*.php' -o -name '*.tsx' -o -name '*.ts' -o -name '*.vue' "
+            f"-o -name '*.js' -o -name '*.css' -o -name '*.scss' -o -type d \\) "
+            f"-not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' "
+            f"-not -path '*/build/*' -not -path '*/.next/*' "
             f"2>/dev/null | head -300"
         )
         files = [line for line in out.splitlines() if line.strip()]
-        # Group by top-level dir
-        structure: dict = {"root": root, "entries": files[:200]}
-        return structure
+        return {"root": root, "entries": files[:200]}
+
+    # ── Plugins ───────────────────────────────────────────────────────────────
 
     def _get_plugins(self, cms: str, root: str) -> dict:
         if not root:
             return {}
         if cms == "wordpress":
-            out = self._run(f"ls '{root}/wp-content/plugins/' 2>/dev/null | head -50")
-            plugins = [p for p in out.splitlines() if p.strip()]
-            # Try to get active plugins from WP CLI
-            active = self._run(f"wp --path='{root}' plugin list --status=active --field=name 2>/dev/null || echo ''")
-            active_list = [p for p in active.splitlines() if p.strip()]
-            return {"installed": plugins, "active": active_list}
+            plugins = [p for p in self._run(f"ls '{root}/wp-content/plugins/' 2>/dev/null | head -50").splitlines() if p.strip()]
+            active = [p for p in self._run(f"wp --path='{root}' plugin list --status=active --field=name 2>/dev/null || echo ''").splitlines() if p.strip()]
+            return {"installed": plugins, "active": active}
         if cms == "joomla":
-            out = self._run(f"ls '{root}/plugins/' 2>/dev/null")
-            return {"groups": [p for p in out.splitlines() if p.strip()]}
+            return {"groups": [p for p in self._run(f"ls '{root}/plugins/' 2>/dev/null").splitlines() if p.strip()]}
         return {}
