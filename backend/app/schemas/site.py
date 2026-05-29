@@ -94,6 +94,25 @@ class TaskPublic(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @staticmethod
+    def from_task(t: "Any") -> "TaskPublic":
+        return TaskPublic(
+            id=str(t.id),
+            site_id=str(t.site_id),
+            title=t.title,
+            tz_text=t.tz_text,
+            status=t.status,
+            subtasks=t.subtasks,
+            estimated_credits=t.estimated_credits,
+            actual_credits=t.actual_credits,
+            confidence=t.confidence,
+            changed_files=t.changed_files,
+            screenshot_before=t.screenshot_before,
+            screenshot_after=t.screenshot_after,
+            error_message=t.error_message,
+            created_at=t.created_at,
+        )
+
 
 class TaskLogPublic(BaseModel):
     id: str

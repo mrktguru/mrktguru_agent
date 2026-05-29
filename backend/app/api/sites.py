@@ -159,7 +159,7 @@ async def list_tasks(site_id: str, user: CurrentUser, db: DB) -> list[TaskPublic
     rows = (await db.scalars(
         select(Task).where(Task.site_id == uuid.UUID(site_id)).order_by(Task.created_at.desc())
     )).all()
-    return [TaskPublic.model_validate(t.__dict__) for t in rows]
+    return [TaskPublic.from_task(t) for t in rows]
 
 
 @router.post("/{site_id}/tasks", response_model=TaskEstimateResponse, status_code=status.HTTP_201_CREATED)
@@ -237,7 +237,7 @@ async def approve_task(
     # Enqueue async execution
     run_execute.delay(str(task.id))
 
-    return TaskPublic.model_validate(task.__dict__)
+    return TaskPublic.from_task(task)
 
 
 @router.get("/{site_id}/tasks/{task_id}/logs", response_model=list[TaskLogPublic])
@@ -268,4 +268,4 @@ async def rollback_task(site_id: str, task_id: str, user: CurrentUser, db: DB) -
 
     task.status = "rolled_back"
     await db.commit()
-    return TaskPublic.model_validate(task.__dict__)
+    return TaskPublic.from_task(task)
