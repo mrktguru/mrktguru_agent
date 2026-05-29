@@ -5,32 +5,26 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
 type Site = {
-  id: string;
-  name: string;
-  url: string | null;
-  status: string;
-  cms: string | null;
-  cms_version: string | null;
-  web_server: string | null;
-  audit_score: number | null;
-  uptime_percent: number | null;
+  id: string; name: string; url: string | null; status: string;
+  cms: string | null; cms_version: string | null; audit_score: number | null;
+  uptime_percent: number | null; created_at: string;
 };
 
-type User = {
-  name: string | null;
-  email: string;
-  plan: string;
-  token_credits: number;
+type User = { name: string | null; email: string; plan: string; token_credits: number };
+
+const CMS_BADGE: Record<string, string> = {
+  wordpress: "bg-blue-50 text-blue-600 border-blue-100",
+  joomla: "bg-orange-50 text-orange-600 border-orange-100",
+  bitrix: "bg-red-50 text-red-600 border-red-100",
+  laravel: "bg-pink-50 text-pink-600 border-pink-100",
+  opencart: "bg-green-50 text-green-600 border-green-100",
+  custom: "bg-gray-100 text-gray-500 border-gray-200",
 };
 
-const CMS_BADGE: Record<string, { label: string; color: string }> = {
-  wordpress: { label: "WordPress", color: "bg-blue-50 text-blue-600 border-blue-100" },
-  joomla:    { label: "Joomla",    color: "bg-orange-50 text-orange-600 border-orange-100" },
-  bitrix:    { label: "Битрикс",   color: "bg-red-50 text-red-600 border-red-100" },
-  laravel:   { label: "Laravel",   color: "bg-pink-50 text-pink-600 border-pink-100" },
-  opencart:  { label: "OpenCart",  color: "bg-green-50 text-green-600 border-green-100" },
-  custom:    { label: "Custom",    color: "bg-gray-100 text-gray-500 border-gray-200" },
-};
+const NAV_ITEMS = [
+  { icon: "◻", label: "Проекты", href: "/dashboard", active: true },
+  { icon: "⚙", label: "Настройки", href: "#", active: false },
+];
 
 export default function DashboardPage() {
   const [sites, setSites] = useState<Site[]>([]);
@@ -47,23 +41,16 @@ export default function DashboardPage() {
       ]);
       setSites(sitesRes.data);
       setUser(userRes.data);
-    } catch {
-      router.push("/login");
-    }
+    } catch { router.push("/login"); }
   }
 
-  const scoreColor = (s: number | null) =>
-    s === null ? "text-text-muted" : s >= 80 ? "text-emerald-600" : s >= 60 ? "text-amber-500" : "text-red-500";
-
-  const uptimeColor = (u: number | null) =>
-    u === null ? "text-text-muted" : u >= 99 ? "text-emerald-600" : u >= 95 ? "text-amber-500" : "text-red-500";
-
   return (
-    <div className="min-h-screen bg-surface-2">
-      {/* Top nav */}
-      <header className="bg-surface border-b border-border px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
+    <div className="flex h-screen overflow-hidden bg-surface-2">
+      {/* ── Left sidebar ── */}
+      <aside className="w-60 bg-surface border-r border-border flex flex-col flex-shrink-0">
+        {/* Logo */}
+        <div className="px-5 py-4 border-b border-border flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center flex-shrink-0">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
               <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
             </svg>
@@ -71,127 +58,189 @@ export default function DashboardPage() {
           <span className="font-semibold text-sm text-text-main">SiteDoc</span>
         </div>
 
-        <div className="flex items-center gap-4">
-          {user && (
-            <div className="flex items-center gap-3 text-sm">
-              <div className="flex items-center gap-1.5 bg-accent/8 text-accent px-3 py-1 rounded-full">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                  <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
-                  <path d="M6 3.5V6.5L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-                </svg>
-                <span className="font-medium">{(user.token_credits ?? 0).toFixed(0)}</span>
-                <span className="text-accent/60">кред.</span>
-              </div>
-              <span className="text-text-muted text-xs">{user.email}</span>
-            </div>
-          )}
-          <button
-            onClick={() => { localStorage.removeItem("token"); router.push("/"); }}
-            className="text-xs text-text-muted hover:text-text-main transition-colors"
-          >
-            Выйти
-          </button>
-        </div>
-      </header>
+        {/* Navigation */}
+        <nav className="flex-1 px-3 py-3 space-y-0.5">
+          {/* Section label */}
+          <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider px-2 mb-2">Меню</p>
 
-      <div className="max-w-4xl mx-auto px-6 py-8">
-        {/* Page title + action */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-xl font-semibold text-text-main">Мои сайты</h1>
-            <p className="text-sm text-text-muted mt-0.5">{sites.length} подключено</p>
-          </div>
-          <button
-            onClick={() => router.push("/site/connect")}
-            className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M7 2V12M2 7H12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
-            Добавить сайт
-          </button>
-        </div>
-
-        {/* Sites grid */}
-        {sites.length === 0 ? (
-          <div className="bg-surface rounded-2xl border border-dashed border-border p-12 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-surface-3 flex items-center justify-center mx-auto mb-4">
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                <rect x="2" y="3" width="16" height="14" rx="3" stroke="#9ca3af" strokeWidth="1.4"/>
-                <path d="M2 7H18" stroke="#9ca3af" strokeWidth="1.4"/>
-                <circle cx="5" cy="5" r="1" fill="#9ca3af"/>
-                <circle cx="8" cy="5" r="1" fill="#9ca3af"/>
-              </svg>
-            </div>
-            <p className="text-text-sub font-medium mb-1">Нет подключённых сайтов</p>
-            <p className="text-sm text-text-muted mb-4">Добавьте первый сайт, чтобы начать</p>
-            <button
-              onClick={() => router.push("/site/connect")}
-              className="text-sm text-accent hover:underline font-medium"
+          {NAV_ITEMS.map((item) => (
+            <a
+              key={item.label}
+              href={item.href}
+              className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-colors ${
+                item.active
+                  ? "bg-accent/8 text-accent font-medium"
+                  : "text-text-sub hover:bg-surface-2 hover:text-text-main"
+              }`}
             >
-              Подключить сайт →
+              <svg width="15" height="15" viewBox="0 0 15 15" fill="none" className="flex-shrink-0">
+                {item.label === "Проекты" ? (
+                  <>
+                    <rect x="1.5" y="1.5" width="5" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+                    <rect x="8.5" y="1.5" width="5" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+                    <rect x="1.5" y="8.5" width="5" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+                    <rect x="8.5" y="8.5" width="5" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+                  </>
+                ) : (
+                  <>
+                    <circle cx="7.5" cy="7.5" r="2.5" stroke="currentColor" strokeWidth="1.3"/>
+                    <path d="M7.5 1v2M7.5 12v2M1 7.5h2M12 7.5h2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                  </>
+                )}
+              </svg>
+              {item.label}
+            </a>
+          ))}
+
+          {/* Projects list */}
+          <div className="mt-3 pt-3 border-t border-border space-y-0.5">
+            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider px-2 mb-2">Проекты</p>
+            {sites.length === 0 && (
+              <p className="text-xs text-text-muted px-3 py-1.5">Нет проектов</p>
+            )}
+            {sites.map((s) => (
+              <a
+                key={s.id}
+                href={`/site/${s.id}`}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-text-sub hover:bg-surface-2 hover:text-text-main transition-colors group"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${s.status === "active" ? "bg-emerald-400" : "bg-gray-300"}`} />
+                <span className="truncate">{s.name}</span>
+              </a>
+            ))}
+
+            <button
+              onClick={() => router.push("/projects/new")}
+              className="flex items-center gap-2 w-full px-3 py-2 rounded-xl text-sm text-text-muted hover:text-accent hover:bg-accent/5 transition-colors"
+            >
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                <path d="M6.5 1.5V11.5M1.5 6.5H11.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+              </svg>
+              Добавить проект
             </button>
           </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {sites.map((s) => {
-              const cms = CMS_BADGE[s.cms || ""] || CMS_BADGE.custom;
-              return (
-                <a
-                  key={s.id}
-                  href={`/site/${s.id}`}
-                  className="group bg-surface rounded-2xl border border-border hover:border-accent/30 hover:shadow-card-hover p-5 transition-all"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      {/* Status + name */}
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                          s.status === "active" ? "bg-emerald-400" :
-                          s.status === "error" ? "bg-red-400" : "bg-amber-400"
-                        }`} />
-                        <span className="font-medium text-text-main truncate">{s.name}</span>
-                      </div>
-                      {s.url && <p className="text-xs text-text-muted truncate mb-3">{s.url}</p>}
+        </nav>
 
-                      {/* Badges */}
-                      <div className="flex flex-wrap gap-1.5">
-                        {s.cms && (
-                          <span className={`text-xs px-2 py-0.5 rounded-lg border font-medium ${cms.color}`}>
-                            {cms.label}{s.cms_version ? ` ${s.cms_version}` : ""}
-                          </span>
-                        )}
-                        {s.web_server && (
-                          <span className="text-xs px-2 py-0.5 rounded-lg border border-border bg-surface-2 text-text-sub">
-                            {s.web_server}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Stats */}
-                    <div className="text-right flex-shrink-0 space-y-1">
-                      {s.uptime_percent !== null && (
-                        <p className={`text-xs font-medium ${uptimeColor(s.uptime_percent)}`}>
-                          {s.uptime_percent.toFixed(1)}%
-                        </p>
-                      )}
-                      {s.audit_score !== null && (
-                        <p className={`text-xs ${scoreColor(s.audit_score)}`}>
-                          {s.audit_score}/100
-                        </p>
-                      )}
-                      <div className="text-xs text-text-muted group-hover:text-accent transition-colors mt-2">
-                        Открыть →
-                      </div>
-                    </div>
-                  </div>
-                </a>
-              );
-            })}
+        {/* User */}
+        {user && (
+          <div className="border-t border-border px-4 py-3 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-text-main truncate">{user.name || user.email}</p>
+              <p className="text-xs text-text-muted">{(user.token_credits ?? 0).toFixed(0)} кредитов</p>
+            </div>
+            <button
+              onClick={() => { localStorage.removeItem("token"); router.push("/"); }}
+              className="text-text-muted hover:text-text-main transition-colors flex-shrink-0"
+              title="Выйти"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M9.5 7H2M5 4L2 7L5 10M8 2H11.5C12.05 2 12.5 2.45 12.5 3V11C12.5 11.55 12.05 12 11.5 12H8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
           </div>
         )}
-      </div>
+      </aside>
+
+      {/* ── Main content ── */}
+      <main className="flex-1 overflow-y-auto">
+        {/* Header */}
+        <div className="sticky top-0 bg-surface border-b border-border px-8 py-4 flex items-center justify-between z-10">
+          <h1 className="text-base font-semibold text-text-main">Проекты</h1>
+          <button
+            onClick={() => router.push("/projects/new")}
+            className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M6 1V11M1 6H11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+            Новый проект
+          </button>
+        </div>
+
+        <div className="px-8 py-6">
+          {sites.length === 0 ? (
+            /* Empty state */
+            <div className="flex flex-col items-center justify-center text-center min-h-80 max-w-sm mx-auto">
+              <div className="w-16 h-16 rounded-2xl bg-surface border border-border shadow-card flex items-center justify-center mb-5">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                  <rect x="2" y="4" width="24" height="20" rx="4" stroke="#d1d5db" strokeWidth="1.5"/>
+                  <path d="M2 10H26" stroke="#d1d5db" strokeWidth="1.5"/>
+                  <circle cx="6" cy="7" r="1.5" fill="#d1d5db"/>
+                  <circle cx="10" cy="7" r="1.5" fill="#d1d5db"/>
+                </svg>
+              </div>
+              <h2 className="text-lg font-semibold text-text-main mb-2">Пока нет проектов</h2>
+              <p className="text-sm text-text-muted mb-6">Создайте первый проект — подключите сайт и начните редактировать с помощью ИИ</p>
+              <button
+                onClick={() => router.push("/projects/new")}
+                className="bg-accent hover:bg-accent-hover text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors"
+              >
+                Создать первый проект
+              </button>
+            </div>
+          ) : (
+            /* Projects grid */
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {sites.map((s) => {
+                const cmsKey = s.cms || "custom";
+                const cmsBadge = CMS_BADGE[cmsKey] || CMS_BADGE.custom;
+                return (
+                  <a
+                    key={s.id}
+                    href={`/site/${s.id}`}
+                    className="group bg-surface rounded-2xl border border-border hover:border-accent/25 hover:shadow-card-hover p-5 transition-all"
+                  >
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${s.status === "active" ? "bg-emerald-400" : s.status === "error" ? "bg-red-400" : "bg-amber-400"}`} />
+                        <span className="font-medium text-sm text-text-main">{s.name}</span>
+                      </div>
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-text-muted group-hover:text-accent transition-colors flex-shrink-0">
+                        <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+
+                    {s.url && <p className="text-xs text-text-muted truncate mb-3">{s.url}</p>}
+
+                    <div className="flex flex-wrap gap-1.5">
+                      {s.cms && (
+                        <span className={`text-xs px-2 py-0.5 rounded-lg border font-medium ${cmsBadge}`}>
+                          {s.cms}{s.cms_version ? ` ${s.cms_version}` : ""}
+                        </span>
+                      )}
+                      {s.audit_score !== null && (
+                        <span className={`text-xs px-2 py-0.5 rounded-lg border ${
+                          s.audit_score >= 80 ? "bg-emerald-50 text-emerald-600 border-emerald-100" :
+                          s.audit_score >= 60 ? "bg-amber-50 text-amber-600 border-amber-100" :
+                          "bg-red-50 text-red-600 border-red-100"
+                        }`}>
+                          {s.audit_score}/100
+                        </span>
+                      )}
+                      {s.uptime_percent !== null && (
+                        <span className="text-xs px-2 py-0.5 rounded-lg border border-border bg-surface-2 text-text-sub">
+                          {s.uptime_percent.toFixed(1)}%
+                        </span>
+                      )}
+                    </div>
+                  </a>
+                );
+              })}
+
+              {/* Add project card */}
+              <button
+                onClick={() => router.push("/projects/new")}
+                className="flex flex-col items-center justify-center bg-surface rounded-2xl border border-dashed border-border hover:border-accent/40 hover:bg-accent/2 p-5 transition-all min-h-32 text-text-muted hover:text-accent"
+              >
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="mb-2">
+                  <path d="M10 3V17M3 10H17" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+                <span className="text-sm font-medium">Добавить проект</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
