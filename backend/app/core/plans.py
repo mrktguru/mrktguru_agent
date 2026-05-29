@@ -10,6 +10,8 @@ class PlanLimits(TypedDict):
     deploys_per_month: int
     iterations_per_month: int
     max_servers: int
+    max_sites: int
+    token_credits_monthly: float
     monitoring: str
 
 
@@ -20,6 +22,8 @@ PLANS: dict[str, PlanLimits] = {
         "deploys_per_month": 10,
         "iterations_per_month": 50,
         "max_servers": 1,
+        "max_sites": 3,
+        "token_credits_monthly": 50.0,
         "monitoring": "basic",
     },
     "pro": {
@@ -28,6 +32,8 @@ PLANS: dict[str, PlanLimits] = {
         "deploys_per_month": -1,
         "iterations_per_month": -1,
         "max_servers": 3,
+        "max_sites": 10,
+        "token_credits_monthly": 200.0,
         "monitoring": "advanced",
     },
     "agency": {
@@ -36,6 +42,8 @@ PLANS: dict[str, PlanLimits] = {
         "deploys_per_month": -1,
         "iterations_per_month": -1,
         "max_servers": -1,
+        "max_sites": -1,
+        "token_credits_monthly": 1000.0,
         "monitoring": "advanced",
     },
 }

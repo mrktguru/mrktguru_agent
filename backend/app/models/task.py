@@ -1,0 +1,43 @@
+"""Task model — a TZ (technical specification) submitted by user for a site."""
+import uuid
+
+from sqlalchemy import Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.core.database import Base
+from app.models._mixins import TimestampMixin, UUIDMixin
+
+
+class Task(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "tasks"
+
+    site_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sites.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # User input
+    title: Mapped[str | None] = mapped_column(String, nullable=True)  # auto-generated from TZ
+    tz_text: Mapped[str | None] = mapped_column(Text, nullable=True)   # raw TZ pasted by user
+    reference_urls: Mapped[list | None] = mapped_column(JSONB, nullable=True)   # URLs to screenshot
+    attachments: Mapped[list | None] = mapped_column(JSONB, nullable=True)      # base64 images
+
+    # Parsed subtasks (list of {id, title, description, files_to_touch, estimated_credits, risk})
+    subtasks: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+    # Estimation
+    estimated_credits: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_credits: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[str | None] = mapped_column(String, nullable=True)  # high|medium|low
+
+    # Status flow: pending → estimated → approved → running → done | failed | rolled_back
+    status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+
+    # Result
+    changed_files: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    screenshot_before: Mapped[str | None] = mapped_column(Text, nullable=True)  # base64 or URL
+    screenshot_after: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
