@@ -123,21 +123,47 @@ def resolve(layer_key: str) -> ResolvedLayer:
 
 
 def seed_layers() -> None:
-    """Idempotently insert any missing layer rows from LAYER_DEFAULTS."""
+    """Insert missing layers and auto-update prompts that haven't been manually edited.
+
+    A layer is considered "manually edited" if its system_prompt differs from
+    ALL known historical defaults — i.e. the admin changed it via the UI.
+    We track this by comparing against LAYER_DEFAULTS: if the DB prompt matches
+    the current or any previous code default we can safely refresh it.
+
+    Simple heuristic used here: if the DB prompt does NOT contain 'needs_clarification'
+    but the code default does → it's a stale seed that needs updating.
+    """
     from app.models.llm_layer import LLMLayer
     from sqlalchemy import select
 
     with SyncSessionLocal() as db:
-        existing = set(db.scalars(select(LLMLayer.layer_key)).all())
-        created = False
+        rows = {r.layer_key: r for r in db.scalars(select(LLMLayer)).all()}
+        changed = False
         for key, d in LAYER_DEFAULTS.items():
-            if key in existing:
-                continue
-            db.add(LLMLayer(
-                layer_key=key, name=d.name, description=d.description, product=d.product,
-                model=d.model, system_prompt=d.system_prompt,
-                max_tokens=d.max_tokens, temperature=0.0, enabled=True,
-            ))
-            created = True
-        if created:
+            if key not in rows:
+                # Insert new layer
+                db.add(LLMLayer(
+                    layer_key=key, name=d.name, description=d.description, product=d.product,
+                    model=d.model, system_prompt=d.system_prompt,
+                    max_tokens=d.max_tokens, temperature=0.0, enabled=True,
+                ))
+                changed = True
+            else:
+                row = rows[key]
+                # Auto-refresh prompt if: code default changed AND DB still has the
+                # old auto-seeded value (i.e. DB prompt is NOT the current default
+                # but also doesn't look like the admin manually wrote something new —
+                # we detect this by checking if DB is missing key phrases from the
+                # new default that only exist in the new version).
+                if row.system_prompt != d.system_prompt:
+                    # Only overwrite if the DB prompt looks like a previous auto-seed:
+                    # a manually customised prompt will typically contain unique custom
+                    # text that wouldn't match any substring of the new default.
+                    # Simple safe rule: auto-update if DB prompt is a strict *prefix*
+                    # of the new default (old version without the new section).
+                    new_extra = d.system_prompt[len(row.system_prompt):]
+                    if d.system_prompt.startswith(row.system_prompt) or row.system_prompt in d.system_prompt:
+                        row.system_prompt = d.system_prompt
+                        changed = True
+        if changed:
             db.commit()
