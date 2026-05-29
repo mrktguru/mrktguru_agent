@@ -113,7 +113,7 @@ async def get_site(site_id: str, user: CurrentUser, db: DB) -> SitePublic:
     return _serialize_site(site)
 
 
-@router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_site(site_id: str, user: CurrentUser, db: DB) -> None:
     site = await _get_site_or_404(site_id, user.id, db)
     await db.delete(site)
