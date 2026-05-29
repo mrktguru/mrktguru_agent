@@ -20,12 +20,17 @@ type TaskEstimate = {
   total_credits: number; confidence: string; estimated_minutes: number;
 };
 
+type Clarification = {
+  task_id: string; status: "needs_clarification";
+  summary: string; questions: string[];
+};
+
 type LogLine = {
   type: string; subtask_index: number | null;
   status: string; message: string; timestamp: string;
 };
 
-type Stage = "input" | "estimated" | "running" | "done";
+type Stage = "input" | "clarifying" | "estimated" | "running" | "done";
 type Tab = "tasks" | "audit" | "history";
 
 const RISK_COLOR = { low: "text-emerald-600 bg-emerald-50", medium: "text-amber-600 bg-amber-50", high: "text-red-600 bg-red-50" };
@@ -47,6 +52,8 @@ export default function SitePage() {
   const [attachments, setAttachments] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [estimate, setEstimate] = useState<TaskEstimate | null>(null);
+  const [clarification, setClarification] = useState<Clarification | null>(null);
+  const [clarifyAnswer, setClarifyAnswer] = useState("");
   const [subtasks, setSubtasks] = useState<Subtask[]>([]);
   const [approving, setApproving] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
@@ -94,16 +101,47 @@ export default function SitePage() {
     if (!tz.trim()) return;
     setSending(true);
     try {
-      const { data } = await api.post<TaskEstimate>(`/api/sites/${id}/tasks`, {
+      const { data } = await api.post<TaskEstimate | Clarification>(`/api/sites/${id}/tasks`, {
         tz_text: tz,
         reference_urls: referenceUrl ? [referenceUrl] : undefined,
         attachments: attachments.length ? attachments : undefined,
       });
-      setEstimate(data);
-      setSubtasks(data.subtasks.map((s) => ({ ...s, enabled: true })));
-      setStage("estimated");
+      if ((data as Clarification).status === "needs_clarification") {
+        setClarification(data as Clarification);
+        setClarifyAnswer("");
+        setStage("clarifying");
+      } else {
+        const est = data as TaskEstimate;
+        setEstimate(est);
+        setSubtasks(est.subtasks.map((s) => ({ ...s, enabled: true })));
+        setStage("estimated");
+      }
     } catch (err: any) {
       alert(err?.response?.data?.detail || "Ошибка анализа ТЗ");
+    } finally { setSending(false); }
+  }
+
+  async function handleSubmitClarification(e: React.FormEvent) {
+    e.preventDefault();
+    if (!clarifyAnswer.trim() || !clarification) return;
+    setSending(true);
+    try {
+      const { data } = await api.post<TaskEstimate | Clarification>(
+        `/api/sites/${id}/tasks/${clarification.task_id}/clarify`,
+        { answers: clarifyAnswer }
+      );
+      if ((data as Clarification).status === "needs_clarification") {
+        setClarification(data as Clarification);
+        setClarifyAnswer("");
+      } else {
+        const est = data as TaskEstimate;
+        setEstimate(est);
+        setSubtasks(est.subtasks.map((s) => ({ ...s, enabled: true })));
+        setClarification(null);
+        setStage("estimated");
+      }
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || "Ошибка");
     } finally { setSending(false); }
   }
 
@@ -155,7 +193,8 @@ export default function SitePage() {
 
   function resetAll() {
     setStage("input"); setTz(""); setReferenceUrl(""); setAttachments([]);
-    setEstimate(null); setSubtasks([]); setLogs([]); setTaskStatus("");
+    setEstimate(null); setClarification(null); setClarifyAnswer("");
+    setSubtasks([]); setLogs([]); setTaskStatus("");
   }
 
   const totalEnabled = subtasks.filter((s) => s.enabled).reduce((a, s) => a + s.estimated_credits, 0);
@@ -247,6 +286,72 @@ export default function SitePage() {
                   </div>
                   <h2 className="text-lg font-semibold text-text-main mb-2">Опишите задачу</h2>
                   <p className="text-sm text-text-muted">Вставьте ТЗ или напишите что нужно изменить на сайте</p>
+                </div>
+              )}
+
+              {/* ── Clarification flow ── */}
+              {stage === "clarifying" && clarification && (
+                <div className="max-w-2xl mx-auto space-y-4">
+                  {/* User's original message */}
+                  <div className="flex justify-end">
+                    <div className="bg-accent text-white rounded-2xl rounded-br-sm px-4 py-3 max-w-lg">
+                      <p className="text-sm">{tz}</p>
+                    </div>
+                  </div>
+
+                  {/* Agent clarification bubble */}
+                  <div className="flex gap-3">
+                    <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                    <div className="bg-surface rounded-2xl rounded-tl-sm border border-border shadow-card px-4 py-3 flex-1">
+                      <p className="text-xs font-semibold text-accent mb-2">SiteDoc AI</p>
+                      {clarification.summary && (
+                        <p className="text-sm text-text-sub mb-3 pb-3 border-b border-border">{clarification.summary}</p>
+                      )}
+                      <p className="text-sm font-medium text-text-main mb-2">Уточните, пожалуйста:</p>
+                      <ol className="space-y-1.5 mb-1">
+                        {clarification.questions.map((q, i) => (
+                          <li key={i} className="flex gap-2 text-sm text-text-main">
+                            <span className="text-accent font-semibold flex-shrink-0">{i + 1}.</span>
+                            <span>{q}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  </div>
+
+                  {/* Answer input */}
+                  <form onSubmit={handleSubmitClarification} className="ml-10">
+                    <textarea
+                      className="w-full border border-border rounded-xl px-3.5 py-3 text-sm bg-surface-2 text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors resize-none h-24"
+                      placeholder="Ваш ответ..."
+                      value={clarifyAnswer}
+                      onChange={(e) => setClarifyAnswer(e.target.value)}
+                      autoFocus
+                    />
+                    <div className="flex items-center justify-between mt-2">
+                      <button type="button" onClick={resetAll} className="text-sm text-text-muted hover:text-text-main">
+                        ← Начать заново
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={sending || !clarifyAnswer.trim()}
+                        className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-sm font-medium px-5 py-2 rounded-xl transition-colors flex items-center gap-2"
+                      >
+                        {sending ? (
+                          <>
+                            <svg className="animate-spin" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                              <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 10"/>
+                            </svg>
+                            Анализирую...
+                          </>
+                        ) : "Ответить →"}
+                      </button>
+                    </div>
+                  </form>
                 </div>
               )}
 
@@ -396,7 +501,7 @@ export default function SitePage() {
               )}
             </div>
 
-            {/* Input panel */}
+            {/* Input panel — only in input stage */}
             {stage === "input" && (
               <div className="bg-surface border-t border-border p-4">
                 <form onSubmit={handleSubmitTz} className="max-w-2xl mx-auto space-y-3">

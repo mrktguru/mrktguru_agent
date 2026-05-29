@@ -68,6 +68,33 @@ class TaskEstimator:
             lines.append(f"Прикреплено изображений: {len(self._task.attachments)}")
         return "\n\n".join(lines)
 
+    async def clarify(self, answers: str) -> dict:
+        """Re-estimate after user provided clarification answers."""
+        site_context = self._build_site_context()
+        original_tz = self._task.tz_text or ""
+        clarification_context = self._task.error_message or ""  # stores previous questions
+
+        combined_message = (
+            f"ТЗ:\n{original_tz}\n\n"
+            f"Уточняющие вопросы были:\n{clarification_context}\n\n"
+            f"Ответы пользователя:\n{answers}"
+        )
+        if self._task.reference_urls:
+            combined_message += "\n\nРефересы (URL): " + ", ".join(self._task.reference_urls)
+
+        layer = resolve("task_estimator")
+        claude = ClaudeClient(model=layer.model)
+        result = claude.call_with_system(
+            system=layer.system_prompt,
+            messages=[
+                {"role": "user", "content": site_context},
+                {"role": "assistant", "content": "Понял контекст сайта. Жду ваше ТЗ."},
+                {"role": "user", "content": combined_message},
+            ],
+            max_tokens=layer.max_tokens,
+        )
+        return self._parse_response(result["content"])
+
     def _parse_response(self, content: str) -> dict:
         # Strip markdown code fences if present
         content = content.strip()
@@ -92,6 +119,9 @@ class TaskEstimator:
                 "confidence": "low",
                 "estimated_minutes": 10,
             }
+        # needs_clarification — return as-is (handled by API layer)
+        if data.get("status") == "needs_clarification":
+            return data
         # Ensure all subtasks have an id
         for i, st in enumerate(data.get("subtasks", [])):
             if not st.get("id"):

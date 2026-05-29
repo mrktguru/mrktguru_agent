@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import uuid
 
+from typing import Union
+
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 
@@ -14,6 +16,7 @@ from app.models.site import Site
 from app.models.task import Task
 from app.models.task_log import TaskLog
 from app.schemas.site import (
+    ClarificationResponse, ClarifyRequest,
     SiteCreate, SitePublic, SiteScanResult,
     TaskCreate, TaskEstimateResponse, TaskPublic, TaskLogPublic,
 )
@@ -162,9 +165,9 @@ async def list_tasks(site_id: str, user: CurrentUser, db: DB) -> list[TaskPublic
     return [TaskPublic.from_task(t) for t in rows]
 
 
-@router.post("/{site_id}/tasks", response_model=TaskEstimateResponse, status_code=status.HTTP_201_CREATED)
-async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: DB) -> TaskEstimateResponse:
-    """Submit a TZ → agent estimates subtasks and returns them for user approval."""
+@router.post("/{site_id}/tasks", status_code=status.HTTP_201_CREATED)
+async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: DB) -> Union[TaskEstimateResponse, ClarificationResponse]:
+    """Submit a TZ → agent estimates subtasks OR asks clarifying questions."""
     from app.services.agent.task_estimator import TaskEstimator
 
     site = await _get_site_or_404(site_id, user.id, db)
@@ -192,10 +195,79 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
         await db.commit()
         raise HTTPException(status_code=500, detail=f"Estimation failed: {exc}") from exc
 
+    # Agent needs clarification before it can plan work
+    if estimate.get("status") == "needs_clarification":
+        questions_text = "\n".join(estimate.get("questions", []))
+        task.status = "clarifying"
+        task.error_message = questions_text  # reuse field to store questions for clarify endpoint
+        await db.commit()
+        return ClarificationResponse(
+            task_id=str(task.id),
+            status="needs_clarification",
+            summary=estimate.get("summary", ""),
+            questions=estimate.get("questions", []),
+        )
+
     task.title = estimate.get("title", payload.tz_text[:80])
     task.subtasks = estimate.get("subtasks", [])
     task.estimated_credits = estimate.get("total_credits", 0)
     task.confidence = estimate.get("confidence", "medium")
+    task.status = "estimated"
+    await db.commit()
+
+    return TaskEstimateResponse(
+        task_id=str(task.id),
+        subtasks=estimate.get("subtasks", []),
+        total_credits=estimate.get("total_credits", 0),
+        confidence=estimate.get("confidence", "medium"),
+        estimated_minutes=estimate.get("estimated_minutes", 10),
+    )
+
+
+@router.post("/{site_id}/tasks/{task_id}/clarify", status_code=status.HTTP_200_OK)
+async def clarify_task(
+    site_id: str,
+    task_id: str,
+    payload: ClarifyRequest,
+    user: CurrentUser,
+    db: DB,
+) -> Union[TaskEstimateResponse, ClarificationResponse]:
+    """User provides answers to clarifying questions → re-estimate."""
+    from app.services.agent.task_estimator import TaskEstimator
+
+    site = await _get_site_or_404(site_id, user.id, db)
+    task = await db.get(Task, task_id)
+    if not task or task.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "clarifying":
+        raise HTTPException(status_code=400, detail="Task is not awaiting clarification")
+
+    try:
+        estimator = TaskEstimator(site, task)
+        estimate = await estimator.clarify(payload.answers)
+    except Exception as exc:
+        task.status = "failed"
+        task.error_message = str(exc)
+        await db.commit()
+        raise HTTPException(status_code=500, detail=f"Clarification failed: {exc}") from exc
+
+    # Still needs more clarification
+    if estimate.get("status") == "needs_clarification":
+        questions_text = "\n".join(estimate.get("questions", []))
+        task.error_message = questions_text
+        await db.commit()
+        return ClarificationResponse(
+            task_id=str(task.id),
+            status="needs_clarification",
+            summary=estimate.get("summary", ""),
+            questions=estimate.get("questions", []),
+        )
+
+    task.title = estimate.get("title", task.tz_text[:80] if task.tz_text else "Задача")
+    task.subtasks = estimate.get("subtasks", [])
+    task.estimated_credits = estimate.get("total_credits", 0)
+    task.confidence = estimate.get("confidence", "medium")
+    task.error_message = None
     task.status = "estimated"
     await db.commit()
 

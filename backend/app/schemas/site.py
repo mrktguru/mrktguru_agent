@@ -76,6 +76,17 @@ class TaskEstimateResponse(BaseModel):
     estimated_minutes: int
 
 
+class ClarificationResponse(BaseModel):
+    task_id: str
+    status: str = "needs_clarification"
+    summary: str
+    questions: list[str]
+
+
+class ClarifyRequest(BaseModel):
+    answers: str
+
+
 class TaskPublic(BaseModel):
     id: str
     site_id: str
