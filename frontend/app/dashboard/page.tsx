@@ -49,7 +49,7 @@ export default function DashboardPage() {
       {/* ── Left sidebar ── */}
       <aside className="w-60 bg-surface border-r border-border flex flex-col flex-shrink-0">
         {/* Logo */}
-        <div className="px-5 py-4 border-b border-border flex items-center gap-2.5">
+        <div className="px-5 border-b border-border flex items-center gap-2.5 h-[57px] flex-shrink-0">
           <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center flex-shrink-0">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
               <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
@@ -95,9 +95,7 @@ export default function DashboardPage() {
           {/* Projects list */}
           <div className="mt-3 pt-3 border-t border-border space-y-0.5">
             <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider px-2 mb-2">Проекты</p>
-            {sites.length === 0 && (
-              <p className="text-xs text-text-muted px-3 py-1.5">Нет проектов</p>
-            )}
+
             {sites.map((s) => (
               <a
                 key={s.id}
@@ -144,17 +142,8 @@ export default function DashboardPage() {
       {/* ── Main content ── */}
       <main className="flex-1 overflow-y-auto">
         {/* Header */}
-        <div className="sticky top-0 bg-surface border-b border-border px-8 py-4 flex items-center justify-between z-10">
+        <div className="sticky top-0 bg-surface border-b border-border px-8 flex items-center h-[57px] z-10">
           <h1 className="text-base font-semibold text-text-main">Проекты</h1>
-          <button
-            onClick={() => router.push("/projects/new")}
-            className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M6 1V11M1 6H11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
-            Новый проект
-          </button>
         </div>
 
         <div className="px-8 py-6">
