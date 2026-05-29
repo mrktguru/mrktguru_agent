@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent, auth, backlog, deploy, projects, servers, sites
+from app.api import agent, auth, backlog, deploy, projects, servers, sites, tasks
 from app.api.tasks_ws import ws_router as tasks_ws_router
 from app.core.config import settings
 
@@ -43,4 +43,5 @@ app.include_router(backlog.router)
 app.include_router(deploy.router)
 app.include_router(deploy.ws_router)
 app.include_router(sites.router)
+app.include_router(tasks.router)
 app.include_router(tasks_ws_router)

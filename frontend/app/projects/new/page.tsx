@@ -149,10 +149,26 @@ export default function NewProjectPage() {
         scan.php_version ? `✓ PHP ${scan.php_version}` : null,
         scan.web_server ? `✓ ${scan.web_server}` : null,
         scan.site_root_path ? `✓ Корень: ${scan.site_root_path}` : null,
-        "✓ Готово! Открываю проект...",
       ].filter(Boolean) as string[]);
 
-      await new Promise((r) => setTimeout(r, 800));
+      // If TZ was provided — submit it for analysis
+      if (form.tzRaw.trim()) {
+        setScanLog((p) => [...p, "🤖 Анализирую ваше ТЗ..."]);
+        try {
+          const { data: estimate } = await api.post<{ task_id: string }>(`/api/sites/${site.id}/tasks`, {
+            tz_text: form.tzRaw,
+          });
+          // Store task_id so workspace can pick it up
+          localStorage.setItem(`pendingTask_${site.id}`, estimate.task_id);
+          setScanLog((p) => [...p, "✓ ТЗ проанализировано", "✓ Открываю проект..."]);
+        } catch {
+          setScanLog((p) => [...p, "⚠ Не удалось проанализировать ТЗ, откроем позже"]);
+        }
+      } else {
+        setScanLog((p) => [...p, "✓ Открываю проект..."]);
+      }
+
+      await new Promise((r) => setTimeout(r, 600));
       router.push(`/site/${site.id}`);
     } catch (err: any) {
       const msg = err?.response?.data?.detail || "Ошибка подключения";

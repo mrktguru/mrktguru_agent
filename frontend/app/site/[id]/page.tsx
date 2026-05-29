@@ -52,6 +52,7 @@ export default function SitePage() {
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [taskStatus, setTaskStatus] = useState("");
   const [stage, setStage] = useState<Stage>("input");
+  const [loadingPending, setLoadingPending] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -64,7 +65,28 @@ export default function SitePage() {
     try {
       const { data } = await api.get<Site>(`/api/sites/${id}`);
       setSite(data);
+      // Check if there's a pending task from onboarding quiz
+      const pendingTaskId = localStorage.getItem(`pendingTask_${id}`);
+      if (pendingTaskId) {
+        localStorage.removeItem(`pendingTask_${id}`);
+        loadPendingTask(pendingTaskId);
+      }
     } catch { router.push("/dashboard"); }
+  }
+
+  async function loadPendingTask(taskId: string) {
+    setLoadingPending(true);
+    try {
+      // Fetch the already-estimated task
+      const { data } = await api.get<TaskEstimate & { tz_text?: string }>(`/api/tasks/${taskId}`);
+      setEstimate({ task_id: taskId, subtasks: data.subtasks || [], total_credits: data.total_credits || 0, confidence: data.confidence || "medium", estimated_minutes: data.estimated_minutes || 10 });
+      setSubtasks((data.subtasks || []).map((s: Subtask) => ({ ...s, enabled: true })));
+      setStage("estimated");
+    } catch {
+      // Task might not be in the right format, ignore
+    } finally {
+      setLoadingPending(false);
+    }
   }
 
   async function handleSubmitTz(e: React.FormEvent) {
@@ -208,7 +230,17 @@ export default function SitePage() {
             {/* Chat/log area */}
             <div ref={logRef} className="flex-1 overflow-y-auto p-6">
 
-              {stage === "input" && (
+              {/* Loading pending task from onboarding */}
+              {loadingPending && (
+                <div className="max-w-xl mx-auto flex flex-col items-center justify-center mt-20 gap-3">
+                  <svg className="animate-spin text-accent" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" strokeDasharray="40 20"/>
+                  </svg>
+                  <p className="text-sm text-text-sub">Загружаю анализ вашего ТЗ...</p>
+                </div>
+              )}
+
+              {stage === "input" && !loadingPending && (
                 <div className="max-w-xl mx-auto text-center mt-16">
                   <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-4">
                     <span className="text-2xl">✏️</span>
@@ -219,15 +251,44 @@ export default function SitePage() {
               )}
 
               {stage === "estimated" && estimate && (
-                <div className="max-w-2xl mx-auto">
-                  <div className="flex items-center gap-2 mb-4">
-                    <div className="w-6 h-6 rounded-full bg-accent/10 flex items-center justify-center">
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                        <path d="M2 6L5 9L10 3" stroke="#6366f1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <div className="max-w-2xl mx-auto space-y-4">
+                  {/* Agent summary bubble */}
+                  <div className="flex gap-3">
+                    <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
                       </svg>
                     </div>
-                    <p className="text-sm font-medium text-text-main">Анализ выполнен — найдено {subtasks.length} задач</p>
+                    <div className="bg-surface rounded-2xl rounded-tl-sm border border-border shadow-card px-4 py-3 flex-1">
+                      <p className="text-xs font-semibold text-accent mb-2">SiteDoc AI</p>
+                      <p className="text-sm text-text-main leading-relaxed mb-3">
+                        Я изучил ваше ТЗ и проанализировал структуру сайта.
+                        Нашёл <strong>{subtasks.length} задач{subtasks.length === 1 ? "у" : subtasks.length < 5 ? "и" : ""}</strong> для выполнения.
+                        Проверьте список ниже — снимите галочки с того, что пока не нужно, и нажмите <strong>«Запустить»</strong>.
+                      </p>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <span className="bg-surface-2 border border-border text-text-sub px-2 py-1 rounded-lg">
+                          ~{estimate.estimated_minutes} мин
+                        </span>
+                        <span className="bg-surface-2 border border-border text-text-sub px-2 py-1 rounded-lg">
+                          {estimate.total_credits.toFixed(0)} кредитов
+                        </span>
+                        <span className={`px-2 py-1 rounded-lg border ${
+                          estimate.confidence === "high" ? "bg-emerald-50 border-emerald-100 text-emerald-700" :
+                          estimate.confidence === "medium" ? "bg-amber-50 border-amber-100 text-amber-700" :
+                          "bg-red-50 border-red-100 text-red-600"
+                        }`}>
+                          {estimate.confidence === "high" ? "✓ Высокая точность" : estimate.confidence === "medium" ? "~ Средняя точность" : "⚠ Низкая точность — уточните ТЗ"}
+                        </span>
+                      </div>
+                    </div>
                   </div>
+
+                  {/* Subtasks card */}
+                  <div className="ml-10">
+                    <div className="flex items-center gap-2 mb-2 px-1">
+                      <p className="text-xs font-semibold text-text-sub uppercase tracking-wide">Задачи</p>
+                    </div>
 
                   <div className="bg-surface rounded-2xl border border-border shadow-card overflow-hidden">
                     <div className="divide-y divide-border">
@@ -286,6 +347,7 @@ export default function SitePage() {
                         </button>
                       </div>
                     </div>
+                  </div>
                   </div>
                 </div>
               )}
