@@ -8,8 +8,9 @@ from app.core.deps import CurrentUser, DB
 from app.core.plans import get_limits, within
 from app.core.security import decrypt_credentials, encrypt_credentials
 from app.models.server import Server
-from app.schemas.server import ServerCreate, ServerPublic, ServerScanResult
+from app.schemas.server import DiscoveredSite, ServerCreate, ServerPublic, ServerScanResult
 from app.services.ssh.client import SSHClient
+from app.services.ssh.scanner import SiteScanner
 
 router = APIRouter(prefix="/api/servers", tags=["servers"])
 
@@ -96,6 +97,20 @@ async def scan_server(server_id: str, user: CurrentUser, db: DB) -> ServerScanRe
     server.installed_software = info["installed_software"]
     await db.commit()
     return ServerScanResult(**info)
+
+
+@router.post("/{server_id}/discover", response_model=list[DiscoveredSite])
+async def discover_sites(server_id: str, user: CurrentUser, db: DB) -> list[DiscoveredSite]:
+    """Enumerate all sites/projects on a server so the user can pick one."""
+    server = await db.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Server not found")
+    try:
+        with _build_ssh(server) as ssh:
+            found = SiteScanner(ssh).discover()
+    except Exception as exc:  # noqa: BLE001 — surface SSH errors to the client
+        raise HTTPException(status_code=400, detail=f"Discovery failed: {exc}") from exc
+    return [DiscoveredSite(**c) for c in found]
 
 
 @router.delete("/{server_id}", status_code=status.HTTP_204_NO_CONTENT)

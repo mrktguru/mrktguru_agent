@@ -69,6 +69,10 @@ services:
       - backend
     ports:
       - "3010:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
     networks:
       - appforge
 

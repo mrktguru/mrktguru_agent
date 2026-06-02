@@ -11,12 +11,22 @@ from pydantic import BaseModel
 class SiteCreate(BaseModel):
     name: str
     url: str | None = None
-    ssh_host: str
+    # When server_id is set, SSH access + creds are inherited from the server,
+    # so the connection fields below are optional.
+    server_id: uuid.UUID | None = None
+    ssh_host: str | None = None
     ssh_port: int = 22
     ssh_user: str = "root"
-    auth_type: str  # 'password' | 'platform_key'
+    auth_type: str | None = None  # 'password' | 'platform_key'
     password: str | None = None
     private_key: str | None = None
+    # Optional pre-filled tech-stack fields from server discovery (avoid re-scan)
+    cms: str | None = None
+    framework: str | None = None
+    site_root_path: str | None = None
+    is_docker: bool | None = None
+    docker_compose_dir: str | None = None
+    docker_container_name: str | None = None
 
 
 class SitePublic(BaseModel):

@@ -5,6 +5,7 @@ import json
 
 from app.core.database import SyncSessionLocal
 from app.core.security import decrypt_credentials
+from app.models.server import Server
 from app.models.site import Site
 from app.models.task import Task
 from app.models.task_log import TaskLog
@@ -41,11 +42,21 @@ def run_execute(self, task_id: str) -> dict:
             db.add(log)
             db.commit()
 
-        creds = json.loads(decrypt_credentials(site.encrypted_credentials)) if site.encrypted_credentials else {}
+        # Server-linked sites inherit SSH credentials from the registered server.
+        enc = site.encrypted_credentials
+        host, port, user = site.ssh_host, site.ssh_port, site.ssh_user
+        if not enc and site.server_id:
+            server = db.get(Server, site.server_id)
+            if server:
+                enc = server.encrypted_credentials
+                host = host or server.ip
+                port = port or server.ssh_port
+                user = user or server.ssh_user
+        creds = json.loads(decrypt_credentials(enc)) if enc else {}
         ssh = SSHClient(
-            host=site.ssh_host,
-            username=site.ssh_user,
-            port=site.ssh_port,
+            host=host,
+            username=user,
+            port=port,
             password=creds.get("password"),
             private_key=creds.get("private_key"),
         )

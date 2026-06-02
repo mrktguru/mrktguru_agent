@@ -45,6 +45,183 @@ class SiteScanner:
         result["installed_plugins"] = self._get_plugins(cms, site_root)
         return result
 
+    # ── Discovery: enumerate ALL sites/projects on the server ─────────────────
+
+    def discover(self) -> list[dict]:
+        """Find every site/project on the server (Docker + vhosts + web roots).
+
+        Unlike scan(), this does not collapse to a single best candidate — it
+        returns a list so the user can pick which project to work on.
+        Each item: {name, url, root_path, cms, framework, is_docker,
+        docker_compose_dir, docker_container_name, source_path}.
+        """
+        candidates: list[dict] = []
+        candidates.extend(self._discover_docker())
+        candidates.extend(self._discover_nginx_vhosts())
+        candidates.extend(self._discover_apache_vhosts())
+        candidates.extend(self._discover_fallback_dirs())
+
+        # Dedup by root_path (Docker wins over plain web roots for the same dir)
+        seen: dict[str, dict] = {}
+        for c in candidates:
+            key = (c.get("root_path") or c.get("docker_compose_dir") or c.get("name") or "").rstrip("/")
+            if not key:
+                continue
+            existing = seen.get(key)
+            if existing is None or (c.get("is_docker") and not existing.get("is_docker")):
+                seen[key] = c
+        return list(seen.values())[:30]
+
+    def _discover_docker(self) -> list[dict]:
+        """One candidate per running web service across all docker-compose files."""
+        docker_ok = self._run("docker ps --format '{{.Names}}' 2>/dev/null | head -1 || echo ''")
+        if not docker_ok:
+            return []
+
+        compose_paths = self._run(
+            "find /root /home /srv /opt -name 'docker-compose.yml' -not -path '*/node_modules/*' "
+            "2>/dev/null | head -20"
+        ).splitlines()
+
+        out: list[dict] = []
+        for compose_path in compose_paths:
+            compose_path = compose_path.strip()
+            if not compose_path:
+                continue
+            compose_dir = compose_path.rsplit("/", 1)[0]
+            compose_content = self._run(f"cat {compose_path} 2>/dev/null | head -200")
+            if not compose_content:
+                continue
+            services = re.findall(r"^  (\w[\w-]*):\s*$", compose_content, re.MULTILINE)
+            project = compose_dir.split("/")[-1].replace("-", "_").replace(" ", "_")
+            for service in services:
+                if any(x in service.lower() for x in ["db", "postgres", "redis", "mysql", "mongo", "minio", "rabbit"]):
+                    continue
+                container = self._run(
+                    f"docker ps --format '{{{{.Names}}}}' | "
+                    f"grep -E '^({project}-{service}-|{project}_{service}_)' | head -1 || echo ''"
+                )
+                if not container:
+                    continue
+                framework, source = self._detect_framework_in_container(container, compose_dir)
+                out.append({
+                    "name": f"{compose_dir.split('/')[-1]} / {service}",
+                    "url": None,
+                    "root_path": source or compose_dir,
+                    "cms": framework if framework in ("wordpress", "laravel") else None,
+                    "framework": framework,
+                    "is_docker": True,
+                    "docker_compose_dir": compose_dir,
+                    "docker_container_name": container,
+                    "source_path": source or compose_dir,
+                })
+        return out
+
+    def _discover_nginx_vhosts(self) -> list[dict]:
+        """Parse `nginx -T` server blocks → (server_name, root) pairs."""
+        out_text = self._run("nginx -T 2>/dev/null || echo ''", timeout=40)
+        if not out_text:
+            return []
+
+        results: list[dict] = []
+        depth = 0
+        in_server = False
+        server_depth = 0
+        names: list[str] = []
+        root: str | None = None
+        for raw in out_text.splitlines():
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if re.match(r"^server\s*\{", line) or line == "server {":
+                in_server = True
+                server_depth = depth
+                names, root = [], None
+            if in_server:
+                m = re.match(r"server_name\s+(.+);", line)
+                if m:
+                    names = [n for n in m.group(1).split() if n and n != "_"]
+                m = re.match(r"root\s+(\S+);", line)
+                if m:
+                    root = m.group(1)
+            depth += line.count("{") - line.count("}")
+            if in_server and depth <= server_depth:
+                in_server = False
+                if root:
+                    cms, _ = self._detect_cms(root)
+                    domain = names[0] if names else None
+                    results.append({
+                        "name": domain or root.rstrip("/").split("/")[-1],
+                        "url": f"https://{domain}" if domain else None,
+                        "root_path": root,
+                        "cms": cms,
+                        "framework": None,
+                        "is_docker": False,
+                        "docker_compose_dir": None,
+                        "docker_container_name": None,
+                        "source_path": None,
+                    })
+        return results
+
+    def _discover_apache_vhosts(self) -> list[dict]:
+        """Pair ServerName + DocumentRoot from apache sites-enabled configs."""
+        out_text = self._run(
+            "grep -rhiE 'ServerName|DocumentRoot' /etc/apache2/sites-enabled/ /etc/httpd/conf.d/ "
+            "2>/dev/null || echo ''"
+        )
+        if not out_text:
+            return []
+        results: list[dict] = []
+        pending_name: str | None = None
+        for raw in out_text.splitlines():
+            line = raw.strip()
+            mn = re.match(r"(?i)ServerName\s+(\S+)", line)
+            if mn:
+                pending_name = mn.group(1)
+                continue
+            md = re.match(r"(?i)DocumentRoot\s+\"?(\S+?)\"?$", line)
+            if md:
+                root = md.group(1)
+                cms, _ = self._detect_cms(root)
+                results.append({
+                    "name": pending_name or root.rstrip("/").split("/")[-1],
+                    "url": f"https://{pending_name}" if pending_name else None,
+                    "root_path": root,
+                    "cms": cms,
+                    "framework": None,
+                    "is_docker": False,
+                    "docker_compose_dir": None,
+                    "docker_container_name": None,
+                    "source_path": None,
+                })
+                pending_name = None
+        return results
+
+    def _discover_fallback_dirs(self) -> list[dict]:
+        """Common web roots when no vhost config is parseable."""
+        dirs = self._run(
+            "ls -d /var/www/*/ /home/*/public_html /srv/www/*/ 2>/dev/null | head -30"
+        ).splitlines()
+        results: list[dict] = []
+        for d in dirs:
+            root = d.strip().rstrip("/")
+            if not root:
+                continue
+            cms, _ = self._detect_cms(root)
+            results.append({
+                "name": root.split("/")[-1] if root.split("/")[-1] != "public_html"
+                else root.split("/")[-2],
+                "url": None,
+                "root_path": root,
+                "cms": cms,
+                "framework": None,
+                "is_docker": False,
+                "docker_compose_dir": None,
+                "docker_container_name": None,
+                "source_path": None,
+            })
+        return results
+
     # ── helpers ─────────────────────────────────────────────────────────────
 
     def _run(self, cmd: str, timeout: int = 30) -> str:

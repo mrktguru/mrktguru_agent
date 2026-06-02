@@ -15,6 +15,11 @@ class Site(UUIDMixin, TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    # Registered server this site lives on; when set, SSH creds are inherited
+    # from the server and not stored on the site itself.
+    server_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("servers.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Basic info
     name: Mapped[str] = mapped_column(String, nullable=False)

@@ -1,53 +1,83 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
-type ConnectMethod = "ssh_password" | "ssh_key" | "ftp" | "sftp";
+type AuthType = "password" | "platform_key";
 
-type FormState = {
-  // Step 1
-  projectName: string;
-  // Step 2
-  tzRaw: string;
-  // Step 3
-  connectMethod: ConnectMethod;
-  host: string;
-  port: string;
-  user: string;
-  password: string;
-  privateKey: string;
-  siteUrl: string;
+type Server = {
+  id: string;
+  name: string;
+  ip: string;
+  ssh_user: string;
+  ssh_port: number;
+  auth_type: string;
+  status: string;
 };
 
-type StepId = 1 | 2 | 3 | 4;
+type DiscoveredSite = {
+  name: string;
+  url: string | null;
+  root_path: string | null;
+  cms: string | null;
+  framework: string | null;
+  is_docker: boolean;
+  docker_compose_dir: string | null;
+  docker_container_name: string | null;
+  source_path: string | null;
+};
 
-/* ─── Helpers ─────────────────────────────────────────────────────────────── */
-const STEP_LABELS = ["Проект", "Задача", "Подключение", "Анализ"];
+type Screen =
+  | "name"
+  | "server"
+  | "discovery"
+  | "edit_task"
+  | "new_git"
+  | "new_describe"
+  | "working";
 
-function ProgressBar({ step }: { step: StepId }) {
+/* ─── Progress bar ───────────────────────────────────────────────────────── */
+const STEP_LABELS = ["Проект", "Сервер", "Выбор", "Задача"];
+
+function screenToStep(s: Screen): number {
+  switch (s) {
+    case "name":
+      return 1;
+    case "server":
+      return 2;
+    case "discovery":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+function ProgressBar({ screen }: { screen: Screen }) {
+  const step = screenToStep(screen);
   return (
     <div className="flex items-center gap-2 mb-8">
       {STEP_LABELS.map((label, i) => {
-        const n = (i + 1) as StepId;
+        const n = i + 1;
         const done = step > n;
         const active = step === n;
         return (
           <div key={n} className="flex items-center gap-2">
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors
-              ${done ? "bg-accent text-white" : active ? "bg-accent text-white" : "bg-surface-3 text-text-muted"}`}>
+            <div
+              className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors
+              ${done ? "bg-accent text-white" : active ? "bg-accent text-white" : "bg-surface-3 text-text-muted"}`}
+            >
               {done ? (
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 5L4.5 7.5L8 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M2 5L4.5 7.5L8 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-              ) : n}
+              ) : (
+                n
+              )}
             </div>
             <span className={`text-xs hidden sm:block ${active ? "text-text-main font-medium" : "text-text-muted"}`}>{label}</span>
-            {i < STEP_LABELS.length - 1 && (
-              <div className={`h-px w-6 sm:w-12 ${done ? "bg-accent" : "bg-border"}`} />
-            )}
+            {i < STEP_LABELS.length - 1 && <div className={`h-px w-6 sm:w-12 ${done ? "bg-accent" : "bg-border"}`} />}
           </div>
         );
       })}
@@ -63,13 +93,15 @@ function SshHint({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-text-main">Как создать SSH-ключ</h3>
           <button onClick={onClose} className="text-text-muted hover:text-text-main">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
           </button>
         </div>
         <ol className="space-y-3 text-sm">
           {[
             { title: "Откройте терминал", cmd: null, desc: "macOS/Linux: Terminal. Windows: PowerShell или WSL" },
-            { title: "Создайте ключ", cmd: "ssh-keygen -t ed25519 -C \"sitedoc\"", desc: "Нажмите Enter три раза (без пароля)" },
+            { title: "Создайте ключ", cmd: 'ssh-keygen -t ed25519 -C "sitedoc"', desc: "Нажмите Enter три раза (без пароля)" },
             { title: "Скопируйте публичный ключ", cmd: "cat ~/.ssh/id_ed25519.pub", desc: "Добавьте его в ~/.ssh/authorized_keys на сервере" },
             { title: "Скопируйте приватный ключ", cmd: "cat ~/.ssh/id_ed25519", desc: "Вставьте его ниже в поле «SSH-ключ»" },
           ].map((item, i) => (
@@ -77,9 +109,7 @@ function SshHint({ onClose }: { onClose: () => void }) {
               <span className="w-5 h-5 rounded-full bg-accent/10 text-accent flex items-center justify-center text-xs font-medium flex-shrink-0 mt-0.5">{i + 1}</span>
               <div>
                 <p className="font-medium text-text-main">{item.title}</p>
-                {item.cmd && (
-                  <code className="block bg-surface-3 border border-border rounded-lg px-3 py-1.5 text-xs font-mono my-1">{item.cmd}</code>
-                )}
+                {item.cmd && <code className="block bg-surface-3 border border-border rounded-lg px-3 py-1.5 text-xs font-mono my-1">{item.cmd}</code>}
                 <p className="text-text-muted text-xs">{item.desc}</p>
               </div>
             </li>
@@ -93,82 +123,179 @@ function SshHint({ onClose }: { onClose: () => void }) {
   );
 }
 
+/* ─── Tech-stack badge for discovery cards ────────────────────────────────── */
+function StackBadge({ site }: { site: DiscoveredSite }) {
+  const label = site.framework || site.cms;
+  if (!label) return null;
+  return <span className="px-2 py-0.5 rounded-md bg-accent/10 text-accent text-xs font-medium">{label}</span>;
+}
+
+/* ─── Log terminal (discovery / working) ──────────────────────────────────── */
+function LogTerminal({ lines, loading }: { lines: string[]; loading: boolean }) {
+  return (
+    <div className="bg-surface-2 border border-border rounded-xl p-4 font-mono text-xs space-y-1.5 min-h-32">
+      {lines.map((line, i) => (
+        <p key={i} className={line.startsWith("✗") ? "text-red-500" : line.startsWith("✓") ? "text-emerald-600" : "text-text-sub"}>
+          {line}
+        </p>
+      ))}
+      {loading && (
+        <div className="flex items-center gap-2 text-text-muted">
+          <svg className="animate-spin" width="11" height="11" viewBox="0 0 11 11" fill="none">
+            <circle cx="5.5" cy="5.5" r="4" stroke="currentColor" strokeWidth="1.3" strokeDasharray="14 10" />
+          </svg>
+          <span>работаю...</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Main component ──────────────────────────────────────────────────────── */
 export default function NewProjectPage() {
   const router = useRouter();
-  const [step, setStep] = useState<StepId>(1);
-  const [form, setForm] = useState<FormState>({
-    projectName: "", tzRaw: "", connectMethod: "ssh_password",
-    host: "", port: "", user: "root", password: "", privateKey: "", siteUrl: "",
-  });
-  const [showSshHint, setShowSshHint] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [screen, setScreen] = useState<Screen>("name");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [showSshHint, setShowSshHint] = useState(false);
+
+  // Step 1
+  const [projectName, setProjectName] = useState("");
+
+  // Step 2 — server registry
+  const [servers, setServers] = useState<Server[]>([]);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  const [addingServer, setAddingServer] = useState(false);
+  const [srv, setSrv] = useState({
+    name: "",
+    ip: "",
+    port: "22",
+    user: "root",
+    authType: "password" as AuthType,
+    password: "",
+    privateKey: "",
+  });
+
+  // Step 3 — discovery
   const [scanLog, setScanLog] = useState<string[]>([]);
+  const [discovered, setDiscovered] = useState<DiscoveredSite[]>([]);
 
-  const set = (k: keyof FormState, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  // Step 4 — fork
+  const [selectedSite, setSelectedSite] = useState<DiscoveredSite | null>(null);
+  const [tzRaw, setTzRaw] = useState("");
+  const [projectDesc, setProjectDesc] = useState("");
 
-  const defaultPort = form.connectMethod === "ftp" ? "21" : form.connectMethod === "sftp" ? "22" : "22";
+  const setS = (k: keyof typeof srv, v: string) => setSrv((f) => ({ ...f, [k]: v }));
 
-  /* ── Navigation ── */
-  function next() { setStep((s) => Math.min(s + 1, 4) as StepId); setError(""); }
-  function back() { setStep((s) => Math.max(s - 1, 1) as StepId); setError(""); }
+  /* ── Load existing servers when entering step 2 ── */
+  useEffect(() => {
+    if (screen !== "server") return;
+    api
+      .get<Server[]>("/api/servers")
+      .then(({ data }) => {
+        setServers(data);
+        if (data.length === 0) setAddingServer(true);
+      })
+      .catch(() => setAddingServer(true));
+  }, [screen]);
 
-  /* ── Submit (step 3 → 4: connect + scan) ── */
-  async function handleConnect() {
+  /* ── Step 2 → create server (if adding) then discover ── */
+  async function handleServerContinue() {
+    setError("");
+    let serverId = selectedServerId;
+
+    if (addingServer || !serverId) {
+      if (!srv.ip.trim()) {
+        setError("Укажите IP или хост сервера");
+        return;
+      }
+      setLoading(true);
+      try {
+        const { data } = await api.post<Server>("/api/servers", {
+          name: srv.name || srv.ip,
+          ip: srv.ip,
+          ssh_user: srv.user,
+          ssh_port: parseInt(srv.port || "22"),
+          auth_type: srv.authType,
+          password: srv.authType === "password" ? srv.password : undefined,
+          private_key: srv.authType === "platform_key" ? srv.privateKey : undefined,
+        });
+        serverId = data.id;
+        setSelectedServerId(data.id);
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || "Не удалось добавить сервер");
+        setLoading(false);
+        return;
+      }
+      setLoading(false);
+    }
+
+    if (serverId) runDiscovery(serverId);
+  }
+
+  /* ── Step 3 — discovery ── */
+  async function runDiscovery(serverId: string) {
+    setScreen("discovery");
     setLoading(true);
     setError("");
-    setStep(4);
-    setScanLog(["🔌 Подключаюсь к серверу..."]);
-
+    setDiscovered([]);
+    setScanLog(["🔌 Подключаюсь к серверу...", "🔍 Ищу сайты и проекты..."]);
     try {
-      const authType = form.connectMethod === "ssh_key" || form.connectMethod === "sftp"
-        ? "platform_key" : form.connectMethod === "ftp" ? "ftp" : "password";
-
-      const portNum = parseInt(form.port || defaultPort);
-
-      const { data: site } = await api.post<{ id: string }>("/api/sites", {
-        name: form.projectName,
-        url: form.siteUrl || undefined,
-        ssh_host: form.host,
-        ssh_port: portNum,
-        ssh_user: form.user,
-        auth_type: authType,
-        password: ["ssh_password", "ftp"].includes(form.connectMethod) ? form.password : undefined,
-        private_key: ["ssh_key", "sftp"].includes(form.connectMethod) ? form.privateKey : undefined,
-      });
-
-      setScanLog((p) => [...p, "✓ Подключено", "🔍 Определяю CMS и стек..."]);
-
-      const { data: scan } = await api.post<any>(`/api/sites/${site.id}/scan`);
-
-      const cmsLine = [scan.cms, scan.cms_version].filter(Boolean).join(" ");
-      setScanLog((p) => [
-        ...p,
-        `✓ CMS: ${cmsLine || "не определена"}`,
-        scan.php_version ? `✓ PHP ${scan.php_version}` : null,
-        scan.web_server ? `✓ ${scan.web_server}` : null,
-        scan.site_root_path ? `✓ Корень: ${scan.site_root_path}` : null,
-      ].filter(Boolean) as string[]);
-
-      // If TZ was provided — submit it for analysis
-      if (form.tzRaw.trim()) {
-        setScanLog((p) => [...p, "🤖 Анализирую ваше ТЗ..."]);
-        try {
-          const { data: estimate } = await api.post<{ task_id: string }>(`/api/sites/${site.id}/tasks`, {
-            tz_text: form.tzRaw,
-          });
-          // Store task_id so workspace can pick it up
-          localStorage.setItem(`pendingTask_${site.id}`, estimate.task_id);
-          setScanLog((p) => [...p, "✓ ТЗ проанализировано", "✓ Открываю проект..."]);
-        } catch {
-          setScanLog((p) => [...p, "⚠ Не удалось проанализировать ТЗ, откроем позже"]);
-        }
-      } else {
-        setScanLog((p) => [...p, "✓ Открываю проект..."]);
+      const { data } = await api.post<DiscoveredSite[]>(`/api/servers/${serverId}/discover`);
+      setDiscovered(data);
+      setScanLog((p) => [...p, `✓ Найдено проектов: ${data.length}`]);
+      setLoading(false);
+      // Nothing found → go straight to "create new"
+      if (data.length === 0) {
+        setScanLog((p) => [...p, "Готовых проектов не найдено — создадим новый"]);
+        setTimeout(() => setScreen("new_git"), 800);
       }
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || "Ошибка обнаружения");
+      setScanLog((p) => [...p, `✗ ${err?.response?.data?.detail || "Ошибка обнаружения"}`]);
+      setLoading(false);
+    }
+  }
 
-      await new Promise((r) => setTimeout(r, 600));
+  /* ── Fork A — edit existing site ── */
+  function pickSite(site: DiscoveredSite) {
+    setSelectedSite(site);
+    setScreen("edit_task");
+    setError("");
+  }
+
+  async function handleCreateSiteTask() {
+    if (!selectedServerId || !selectedSite) return;
+    setScreen("working");
+    setLoading(true);
+    setError("");
+    setScanLog(["🔧 Подключаю проект..."]);
+    try {
+      const { data: site } = await api.post<{ id: string }>("/api/sites", {
+        name: projectName || selectedSite.name,
+        url: selectedSite.url || undefined,
+        server_id: selectedServerId,
+        cms: selectedSite.cms || undefined,
+        framework: selectedSite.framework || undefined,
+        site_root_path: selectedSite.source_path || selectedSite.root_path || undefined,
+        is_docker: selectedSite.is_docker,
+        docker_compose_dir: selectedSite.docker_compose_dir || undefined,
+        docker_container_name: selectedSite.docker_container_name || undefined,
+      });
+      setScanLog((p) => [...p, "✓ Проект подключён"]);
+
+      if (tzRaw.trim()) {
+        setScanLog((p) => [...p, "🤖 Анализирую вашу задачу..."]);
+        try {
+          const { data: estimate } = await api.post<{ task_id: string }>(`/api/sites/${site.id}/tasks`, { tz_text: tzRaw });
+          localStorage.setItem(`pendingTask_${site.id}`, estimate.task_id);
+          setScanLog((p) => [...p, "✓ Задача проанализирована"]);
+        } catch {
+          setScanLog((p) => [...p, "⚠ Не удалось проанализировать задачу, откроем позже"]);
+        }
+      }
+      setScanLog((p) => [...p, "✓ Открываю проект..."]);
+      await new Promise((r) => setTimeout(r, 500));
       router.push(`/site/${site.id}`);
     } catch (err: any) {
       const msg = err?.response?.data?.detail || "Ошибка подключения";
@@ -178,7 +305,38 @@ export default function NewProjectPage() {
     }
   }
 
-  /* ── Render steps ── */
+  /* ── Fork B — create new project ── */
+  async function handleCreateProject() {
+    setScreen("working");
+    setLoading(true);
+    setError("");
+    setScanLog(["📦 Создаю проект..."]);
+    try {
+      const { data: project } = await api.post<{ id: string }>("/api/projects", {
+        name: projectName,
+        server_id: selectedServerId || undefined,
+      });
+      setScanLog((p) => [...p, "✓ Проект создан", "🤖 Анализирую описание..."]);
+      if (projectDesc.trim()) {
+        try {
+          await api.post(`/api/agent/${project.id}/chat`, { message: projectDesc });
+          setScanLog((p) => [...p, "✓ Описание проанализировано"]);
+        } catch {
+          setScanLog((p) => [...p, "⚠ Анализ продолжим в чате проекта"]);
+        }
+      }
+      setScanLog((p) => [...p, "✓ Открываю проект..."]);
+      await new Promise((r) => setTimeout(r, 500));
+      router.push(`/projects/${project.id}`);
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || "Ошибка создания проекта";
+      setError(msg);
+      setScanLog((p) => [...p, `✗ ${msg}`]);
+      setLoading(false);
+    }
+  }
+
+  /* ── Render ── */
   return (
     <main className="min-h-screen bg-surface-2 flex flex-col items-center justify-center px-6 py-12">
       {showSshHint && <SshHint onClose={() => setShowSshHint(false)} />}
@@ -188,250 +346,380 @@ export default function NewProjectPage() {
         <div className="flex items-center gap-2 mb-8">
           <div className="w-8 h-8 rounded-xl bg-accent flex items-center justify-center">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
+              <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
             </svg>
           </div>
           <span className="font-semibold text-text-main">SiteDoc</span>
         </div>
 
-        <ProgressBar step={step} />
+        <ProgressBar screen={screen} />
 
         {/* ── Step 1: Project name ── */}
-        {step === 1 && (
+        {screen === "name" && (
           <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
             <div className="mb-6">
               <h2 className="text-xl font-semibold text-text-main mb-1">Как называется ваш проект?</h2>
               <p className="text-sm text-text-muted">Это может быть название сайта или компании</p>
             </div>
-
             <input
               className="w-full rounded-xl border border-border bg-surface-2 px-4 py-3 text-base text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors"
               placeholder="Например: Интернет-магазин TechShop"
-              value={form.projectName}
-              onChange={(e) => set("projectName", e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && form.projectName.trim() && next()}
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && projectName.trim() && setScreen("server")}
               autoFocus
             />
-
             <div className="flex justify-end mt-5">
               <button
-                onClick={next}
-                disabled={!form.projectName.trim()}
+                onClick={() => setScreen("server")}
+                disabled={!projectName.trim()}
                 className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
               >
                 Далее
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
             </div>
           </div>
         )}
 
-        {/* ── Step 2: TZ ── */}
-        {step === 2 && (
+        {/* ── Step 2: Server access ── */}
+        {screen === "server" && (
           <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
             <div className="mb-6">
-              <h2 className="text-xl font-semibold text-text-main mb-1">Что нужно сделать?</h2>
-              <p className="text-sm text-text-muted">Опишите задачу своими словами — система сама разберётся в деталях</p>
+              <h2 className="text-xl font-semibold text-text-main mb-1">Подключите сервер</h2>
+              <p className="text-sm text-text-muted">Выберите сервер или добавьте новый — мы найдём на нём ваши проекты</p>
             </div>
 
-            <textarea
-              className="w-full rounded-xl border border-border bg-surface-2 px-4 py-3 text-sm text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors resize-none h-36"
-              placeholder={"Например:\n«Нужно исправить баннеры на главной странице — они отображаются неровно. Добавить слайдер на мобильной версии. Шрифт сделать одинаковым»"}
-              value={form.tzRaw}
-              onChange={(e) => set("tzRaw", e.target.value)}
-              autoFocus
-            />
-
-            <div className="flex items-center gap-2 mt-3 p-3 bg-accent/5 border border-accent/15 rounded-xl">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-accent flex-shrink-0">
-                <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2"/>
-                <path d="M7 4V7.5M7 9.5V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-              <p className="text-xs text-accent/80">ИИ проанализирует сайт с учётом вашей задачи после подключения</p>
-            </div>
-
-            <div className="flex justify-between mt-5">
-              <button onClick={back} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
-                Назад
-              </button>
-              <button
-                onClick={next}
-                disabled={!form.tzRaw.trim()}
-                className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
-              >
-                Далее
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ── Step 3: Connection ── */}
-        {step === 3 && (
-          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold text-text-main mb-1">Подключите сайт</h2>
-              <p className="text-sm text-text-muted">Выберите способ доступа к серверу</p>
-            </div>
-
-            {/* Method selector */}
-            <div className="grid grid-cols-2 gap-2 mb-5">
-              {([
-                { id: "ssh_password", icon: "🔑", label: "SSH", sub: "Пароль" },
-                { id: "ssh_key",      icon: "🗝️", label: "SSH", sub: "Ключ" },
-                { id: "ftp",          icon: "📂", label: "FTP", sub: "Пароль" },
-                { id: "sftp",         icon: "🔒", label: "SFTP", sub: "Ключ" },
-              ] as { id: ConnectMethod; icon: string; label: string; sub: string }[]).map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => set("connectMethod", m.id)}
-                  className={`flex items-center gap-2.5 px-3.5 py-3 rounded-xl border text-left transition-colors ${
-                    form.connectMethod === m.id
-                      ? "border-accent bg-accent/5 text-text-main"
-                      : "border-border bg-surface-2 text-text-sub hover:border-accent/30"
-                  }`}
-                >
-                  <span className="text-xl leading-none">{m.icon}</span>
-                  <div>
-                    <p className="text-sm font-medium leading-tight">{m.label}</p>
-                    <p className="text-xs text-text-muted">{m.sub}</p>
-                  </div>
+            {/* Existing servers */}
+            {servers.length > 0 && !addingServer && (
+              <div className="space-y-2 mb-4">
+                {servers.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setSelectedServerId(s.id)}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${
+                      selectedServerId === s.id ? "border-accent bg-accent/5" : "border-border bg-surface-2 hover:border-accent/30"
+                    }`}
+                  >
+                    <span className="text-xl">🖥️</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-text-main truncate">{s.name}</p>
+                      <p className="text-xs text-text-muted">
+                        {s.ssh_user}@{s.ip}:{s.ssh_port}
+                      </p>
+                    </div>
+                    {selectedServerId === s.id && (
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-accent">
+                        <path d="M3 7L6 10L11 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </button>
+                ))}
+                <button onClick={() => { setAddingServer(true); setSelectedServerId(null); }} className="text-sm text-accent hover:underline mt-1">
+                  + Добавить другой сервер
                 </button>
-              ))}
-            </div>
-
-            {/* URL */}
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-text-sub mb-1.5">URL сайта</label>
-              <input className="field" placeholder="https://example.ru" value={form.siteUrl} onChange={(e) => set("siteUrl", e.target.value)} />
-            </div>
-
-            {/* Host + port + user */}
-            <div className="flex gap-2 mb-3">
-              <div className="flex-1">
-                <label className="block text-xs font-medium text-text-sub mb-1.5">
-                  {["ftp", "sftp"].includes(form.connectMethod) ? "FTP-хост" : "SSH-хост"}
-                </label>
-                <input className="field" placeholder="185.100.50.1 или example.ru" value={form.host} onChange={(e) => set("host", e.target.value)} required />
-              </div>
-              <div className="w-20">
-                <label className="block text-xs font-medium text-text-sub mb-1.5">Порт</label>
-                <input className="field" placeholder={defaultPort} value={form.port} onChange={(e) => set("port", e.target.value)} />
-              </div>
-            </div>
-
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-text-sub mb-1.5">Логин</label>
-              <input className="field" value={form.user} onChange={(e) => set("user", e.target.value)} />
-            </div>
-
-            {/* Auth fields */}
-            {["ssh_password", "ftp"].includes(form.connectMethod) && (
-              <div className="mb-3">
-                <label className="block text-xs font-medium text-text-sub mb-1.5">Пароль</label>
-                <input type="password" className="field" placeholder="••••••••" value={form.password} onChange={(e) => set("password", e.target.value)} />
               </div>
             )}
 
-            {["ssh_key", "sftp"].includes(form.connectMethod) && (
-              <div className="mb-3">
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-medium text-text-sub">SSH-ключ (приватный)</label>
-                  <button onClick={() => setShowSshHint(true)} className="text-xs text-accent hover:underline">
-                    Как создать? →
+            {/* Add new server form */}
+            {addingServer && (
+              <div className="space-y-3 mb-4">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setS("authType", "password")}
+                    className={`flex items-center gap-2.5 px-3.5 py-3 rounded-xl border text-left transition-colors ${
+                      srv.authType === "password" ? "border-accent bg-accent/5 text-text-main" : "border-border bg-surface-2 text-text-sub hover:border-accent/30"
+                    }`}
+                  >
+                    <span className="text-xl leading-none">🔑</span>
+                    <div>
+                      <p className="text-sm font-medium leading-tight">SSH</p>
+                      <p className="text-xs text-text-muted">Пароль</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setS("authType", "platform_key")}
+                    className={`flex items-center gap-2.5 px-3.5 py-3 rounded-xl border text-left transition-colors ${
+                      srv.authType === "platform_key" ? "border-accent bg-accent/5 text-text-main" : "border-border bg-surface-2 text-text-sub hover:border-accent/30"
+                    }`}
+                  >
+                    <span className="text-xl leading-none">🗝️</span>
+                    <div>
+                      <p className="text-sm font-medium leading-tight">SSH</p>
+                      <p className="text-xs text-text-muted">Ключ</p>
+                    </div>
                   </button>
                 </div>
-                <textarea
-                  className="field font-mono text-xs h-28 resize-none"
-                  placeholder={"-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"}
-                  value={form.privateKey}
-                  onChange={(e) => set("privateKey", e.target.value)}
-                />
+
+                <div>
+                  <label className="block text-xs font-medium text-text-sub mb-1.5">Название сервера</label>
+                  <input className="field" placeholder="Мой VPS" value={srv.name} onChange={(e) => setS("name", e.target.value)} />
+                </div>
+
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-text-sub mb-1.5">IP / хост</label>
+                    <input className="field" placeholder="185.100.50.1 или example.ru" value={srv.ip} onChange={(e) => setS("ip", e.target.value)} />
+                  </div>
+                  <div className="w-20">
+                    <label className="block text-xs font-medium text-text-sub mb-1.5">Порт</label>
+                    <input className="field" placeholder="22" value={srv.port} onChange={(e) => setS("port", e.target.value)} />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-text-sub mb-1.5">Логин</label>
+                  <input className="field" value={srv.user} onChange={(e) => setS("user", e.target.value)} />
+                </div>
+
+                {srv.authType === "password" ? (
+                  <div>
+                    <label className="block text-xs font-medium text-text-sub mb-1.5">Пароль</label>
+                    <input type="password" className="field" placeholder="••••••••" value={srv.password} onChange={(e) => setS("password", e.target.value)} />
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-medium text-text-sub">SSH-ключ (приватный)</label>
+                      <button onClick={() => setShowSshHint(true)} className="text-xs text-accent hover:underline">
+                        Как создать? →
+                      </button>
+                    </div>
+                    <textarea
+                      className="field font-mono text-xs h-28 resize-none"
+                      placeholder={"-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"}
+                      value={srv.privateKey}
+                      onChange={(e) => setS("privateKey", e.target.value)}
+                    />
+                  </div>
+                )}
+
+                <details>
+                  <summary className="text-xs text-text-muted cursor-pointer hover:text-text-sub select-none">Где найти данные для подключения?</summary>
+                  <div className="mt-2 p-3 bg-surface-3 rounded-xl text-xs text-text-sub space-y-1.5">
+                    <p>• <strong>Timeweb / SpaceWeb / Beget</strong>: панель управления → SSH/SFTP → данные доступа</p>
+                    <p>• <strong>VPS/VDS</strong>: в письме от провайдера при заказе сервера</p>
+                    <p>• <strong>ISPmanager</strong>: Главное меню → Пользователи → SSH</p>
+                  </div>
+                </details>
+
+                <details>
+                  <summary className="text-xs text-text-muted cursor-pointer hover:text-text-sub select-none mt-1">Нет SSH-доступа? Как включить</summary>
+                  <div className="mt-2 p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-800 space-y-1.5">
+                    <p className="font-medium mb-1">SSH доступен у большинства хостингов — обычно просто не включён по умолчанию:</p>
+                    <p>• <strong>Timeweb</strong>: Хостинг → SSH/SFTP → «Разрешить SSH» (1 клик)</p>
+                    <p>• <strong>Beget</strong>: Настройки аккаунта → SSH → «Активировать»</p>
+                    <p>• <strong>SpaceWeb</strong>: Панель → Настройки → SSH Доступ → Включить</p>
+                    <p>• <strong>Reg.ru</strong>: Конфигуратор хостинга → SSH → Подключить</p>
+                    <p>• <strong>ISPmanager</strong>: Пользователи → [ваш логин] → SSH → поставить галочку</p>
+                    <p>• <strong>Другой хостинг</strong>: найдите раздел «SSH», «Терминал» или «Shell» в панели управления</p>
+                  </div>
+                </details>
               </div>
             )}
-
-            {/* FTP hint */}
-            {form.connectMethod === "ftp" && (
-              <div className="mb-3 p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-700">
-                ⚠️ FTP не шифрует данные. Рекомендуем SFTP или SSH для безопасности.
-              </div>
-            )}
-
-            {/* Where to find creds */}
-            <details className="mb-4">
-              <summary className="text-xs text-text-muted cursor-pointer hover:text-text-sub select-none">
-                Где найти данные для подключения?
-              </summary>
-              <div className="mt-2 p-3 bg-surface-3 rounded-xl text-xs text-text-sub space-y-1.5">
-                <p>• <strong>Хостинг-провайдеры</strong> (Timeweb, SpaceWeb, Beget): панель управления → SSH / FTP → настройки</p>
-                <p>• <strong>VPS/VDS</strong>: в письме от провайдера при заказе</p>
-                <p>• <strong>ISPmanager</strong>: Главное меню → Пользователи → SSH</p>
-                <p>• Нет доступа? Попросите администратора выдать SSH-пользователя</p>
-              </div>
-            </details>
 
             {error && (
               <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2 mb-3">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2"/><path d="M7 4.5V7.5M7 9.5V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
+                  <path d="M7 4.5V7.5M7 9.5V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
                 {error}
-                <button onClick={() => { setError(""); setStep(3); }} className="ml-auto text-xs underline">Исправить</button>
               </div>
             )}
 
             <div className="flex justify-between">
-              <button onClick={back} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
+              <button onClick={() => setScreen("name")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
                 Назад
               </button>
               <button
-                onClick={handleConnect}
-                disabled={loading || !form.host.trim()}
+                onClick={handleServerContinue}
+                disabled={loading || (!selectedServerId && !srv.ip.trim())}
                 className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
               >
-                Подключить и проанализировать
+                {loading ? "Подключаю..." : "Найти проекты"}
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
             </div>
           </div>
         )}
 
-        {/* ── Step 4: Scanning ── */}
-        {step === 4 && (
+        {/* ── Step 3: Discovery ── */}
+        {screen === "discovery" && (
           <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
             <div className="mb-5">
-              <h2 className="text-xl font-semibold text-text-main mb-1">
-                {error ? "Ошибка подключения" : loading ? "Анализирую сайт..." : "Готово!"}
-              </h2>
-              {!error && <p className="text-sm text-text-muted">Это займёт около 20–30 секунд</p>}
+              <h2 className="text-xl font-semibold text-text-main mb-1">{loading ? "Ищу проекты на сервере..." : "Что нашлось на сервере"}</h2>
+              {!loading && discovered.length > 0 && <p className="text-sm text-text-muted">Выберите проект для доработки или создайте новый</p>}
             </div>
 
-            <div className="bg-surface-2 border border-border rounded-xl p-4 font-mono text-xs space-y-1.5 min-h-32">
-              {scanLog.map((line, i) => (
-                <p key={i} className={
-                  line.startsWith("✗") ? "text-red-500" :
-                  line.startsWith("✓") ? "text-emerald-600" :
-                  "text-text-sub"
-                }>{line}</p>
-              ))}
-              {loading && (
-                <div className="flex items-center gap-2 text-text-muted">
-                  <svg className="animate-spin" width="11" height="11" viewBox="0 0 11 11" fill="none">
-                    <circle cx="5.5" cy="5.5" r="4" stroke="currentColor" strokeWidth="1.3" strokeDasharray="14 10"/>
-                  </svg>
-                  <span>работаю...</span>
+            <LogTerminal lines={scanLog} loading={loading} />
+
+            {!loading && (
+              <div className="mt-4 space-y-2">
+                {discovered.map((site, i) => (
+                  <button
+                    key={i}
+                    onClick={() => pickSite(site)}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-surface-2 hover:border-accent/40 hover:bg-accent/5 text-left transition-colors"
+                  >
+                    <span className="text-xl">{site.is_docker ? "🐳" : "🌐"}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-text-main truncate">{site.name}</p>
+                        <StackBadge site={site} />
+                      </div>
+                      {site.root_path && <p className="text-xs text-text-muted truncate font-mono">{site.root_path}</p>}
+                    </div>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-text-muted flex-shrink-0">
+                      <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                ))}
+
+                {/* Create new project */}
+                <button
+                  onClick={() => setScreen("new_git")}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-dashed border-accent/40 bg-accent/5 hover:bg-accent/10 text-left transition-colors"
+                >
+                  <span className="text-xl">✨</span>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-accent">Создать новый проект</p>
+                    <p className="text-xs text-text-muted">Собрать новый сайт или приложение с нуля</p>
+                  </div>
+                </button>
+
+                <div className="flex justify-start pt-1">
+                  <button onClick={() => setScreen("server")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
+                    Назад
+                  </button>
                 </div>
-              )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Fork A: edit existing — describe task ── */}
+        {screen === "edit_task" && selectedSite && (
+          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
+            <div className="mb-4">
+              <h2 className="text-xl font-semibold text-text-main mb-1">Что нужно сделать?</h2>
+              <p className="text-sm text-text-muted">
+                Проект: <span className="font-medium text-text-sub">{selectedSite.name}</span>
+              </p>
             </div>
 
+            <textarea
+              className="w-full rounded-xl border border-border bg-surface-2 px-4 py-3 text-sm text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors resize-none h-36"
+              placeholder={"Например:\n«Исправить баннеры на главной — они отображаются неровно. Добавить слайдер на мобильной версии.»"}
+              value={tzRaw}
+              onChange={(e) => setTzRaw(e.target.value)}
+              autoFocus
+            />
+            <div className="flex items-center gap-2 mt-3 p-3 bg-accent/5 border border-accent/15 rounded-xl">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-accent flex-shrink-0">
+                <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M7 4V7.5M7 9.5V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+              <p className="text-xs text-accent/80">ИИ проанализирует проект с учётом вашей задачи и при необходимости задаст уточняющие вопросы</p>
+            </div>
+
+            <div className="flex justify-between mt-5">
+              <button onClick={() => setScreen("discovery")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
+                Назад
+              </button>
+              <button onClick={handleCreateSiteTask} className="bg-accent hover:bg-accent-hover text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2">
+                Подключить и проанализировать
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Fork B step 1: Git repository (optional) ── */}
+        {screen === "new_git" && (
+          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
+            <div className="mb-5">
+              <h2 className="text-xl font-semibold text-text-main mb-1">Хранилище кода</h2>
+              <p className="text-sm text-text-muted">Подключите Git-репозиторий для версий кода — или пропустите, можно добавить позже</p>
+            </div>
+
+            <div className="space-y-2 mb-4">
+              <div className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-surface-2 opacity-60">
+                <span className="text-xl">🐙</span>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-text-main">Создать GitHub-репозиторий</p>
+                  <p className="text-xs text-text-muted">Скоро — подключение по токену доступа</p>
+                </div>
+                <span className="text-xs px-2 py-0.5 rounded-md bg-surface-3 text-text-muted">скоро</span>
+              </div>
+            </div>
+
+            <div className="flex justify-between">
+              <button onClick={() => setScreen("discovery")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
+                Назад
+              </button>
+              <button onClick={() => setScreen("new_describe")} className="bg-accent hover:bg-accent-hover text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2">
+                Пропустить
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Fork B step 2: Describe new project ── */}
+        {screen === "new_describe" && (
+          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
+            <div className="mb-4">
+              <h2 className="text-xl font-semibold text-text-main mb-1">Опишите проект</h2>
+              <p className="text-sm text-text-muted">Что нужно создать? Система проанализирует и уточнит детали</p>
+            </div>
+
+            <textarea
+              className="w-full rounded-xl border border-border bg-surface-2 px-4 py-3 text-sm text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors resize-none h-36"
+              placeholder={"Например:\n«Лендинг для кофейни с меню, формой бронирования столика и картой проезда.»"}
+              value={projectDesc}
+              onChange={(e) => setProjectDesc(e.target.value)}
+              autoFocus
+            />
+
+            <div className="flex justify-between mt-5">
+              <button onClick={() => setScreen("new_git")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
+                Назад
+              </button>
+              <button
+                onClick={handleCreateProject}
+                disabled={!projectDesc.trim()}
+                className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                Создать и проанализировать
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Working (final async) ── */}
+        {screen === "working" && (
+          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
+            <div className="mb-5">
+              <h2 className="text-xl font-semibold text-text-main mb-1">{error ? "Ошибка" : loading ? "Готовлю проект..." : "Готово!"}</h2>
+              {!error && <p className="text-sm text-text-muted">Это займёт несколько секунд</p>}
+            </div>
+            <LogTerminal lines={scanLog} loading={loading} />
             {error && (
               <div className="mt-4 flex gap-2">
-                <button onClick={() => { setStep(3); setError(""); }} className="flex-1 border border-border rounded-xl py-2.5 text-sm text-text-sub hover:bg-surface-2 transition-colors">
-                  Изменить данные
+                <button onClick={() => setScreen(selectedSite ? "edit_task" : "new_describe")} className="flex-1 border border-border rounded-xl py-2.5 text-sm text-text-sub hover:bg-surface-2 transition-colors">
+                  Назад
                 </button>
               </div>
             )}
@@ -450,10 +738,12 @@ export default function NewProjectPage() {
           color: #111827;
           transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
         }
-        .field::placeholder { color: #9ca3af; }
+        .field::placeholder {
+          color: #9ca3af;
+        }
         .field:focus {
           border-color: #6366f1;
-          box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
+          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
           background: #fff;
           outline: none;
         }

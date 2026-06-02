@@ -35,3 +35,17 @@ class ServerScanResult(BaseModel):
     os_info: dict[str, Any]
     hardware_info: dict[str, Any]
     installed_software: dict[str, Any]
+
+
+class DiscoveredSite(BaseModel):
+    """A site/project found on a server during discovery."""
+
+    name: str
+    url: str | None = None
+    root_path: str | None = None
+    cms: str | None = None
+    framework: str | None = None
+    is_docker: bool = False
+    docker_compose_dir: str | None = None
+    docker_container_name: str | None = None
+    source_path: str | None = None

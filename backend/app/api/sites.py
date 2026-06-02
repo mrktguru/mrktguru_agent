@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from app.core.deps import CurrentUser, DB
 from app.core.plans import get_limits, within
 from app.core.security import decrypt_credentials, encrypt_credentials
+from app.models.server import Server
 from app.models.site import Site
 from app.models.task import Task
 from app.models.task_log import TaskLog
@@ -50,12 +51,22 @@ def _serialize_site(s: Site) -> SitePublic:
     })
 
 
-def _build_ssh(site: Site) -> SSHClient:
-    creds = json.loads(decrypt_credentials(site.encrypted_credentials)) if site.encrypted_credentials else {}
+async def _build_ssh(site: Site, db: DB) -> SSHClient:
+    """Build an SSH client for a site, inheriting creds from its server if needed."""
+    enc = site.encrypted_credentials
+    host, port, user = site.ssh_host, site.ssh_port, site.ssh_user
+    if not enc and site.server_id:
+        server = await db.get(Server, site.server_id)
+        if server:
+            enc = server.encrypted_credentials
+            host = host or server.ip
+            port = port or server.ssh_port
+            user = user or server.ssh_user
+    creds = json.loads(decrypt_credentials(enc)) if enc else {}
     return SSHClient(
-        host=site.ssh_host,
-        username=site.ssh_user,
-        port=site.ssh_port,
+        host=host,
+        username=user,
+        port=port,
         password=creds.get("password"),
         private_key=creds.get("private_key"),
     )
@@ -86,6 +97,36 @@ async def create_site(payload: SiteCreate, user: CurrentUser, db: DB) -> SitePub
             detail=f"Достигнут лимит сайтов для тарифа '{user.plan}' ({limits['max_sites']})",
         )
 
+    # Path A: site discovered on a registered server → inherit SSH + creds.
+    if payload.server_id is not None:
+        server = await db.get(Server, payload.server_id)
+        if not server or server.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Server not found")
+        site = Site(
+            user_id=user.id,
+            server_id=server.id,
+            name=payload.name,
+            url=payload.url,
+            ssh_host=payload.ssh_host or server.ip,
+            ssh_port=payload.ssh_port or server.ssh_port,
+            ssh_user=payload.ssh_user or server.ssh_user,
+            auth_type=payload.auth_type or server.auth_type,
+            encrypted_credentials=None,  # inherited from server at runtime
+            cms=payload.cms,
+            framework=payload.framework,
+            site_root_path=payload.site_root_path,
+            is_docker=payload.is_docker,
+            docker_compose_dir=payload.docker_compose_dir,
+            docker_container_name=payload.docker_container_name,
+        )
+        db.add(site)
+        await db.commit()
+        await db.refresh(site)
+        return _serialize_site(site)
+
+    # Path B: standalone site with its own credentials.
+    if not payload.ssh_host or not payload.auth_type:
+        raise HTTPException(status_code=400, detail="ssh_host and auth_type are required without server_id")
     creds: dict[str, str] = {}
     if payload.auth_type == "password":
         if not payload.password:
@@ -132,7 +173,8 @@ async def scan_site(site_id: str, user: CurrentUser, db: DB) -> SiteScanResult:
     await db.commit()
 
     try:
-        with _build_ssh(site) as ssh:
+        ssh_client = await _build_ssh(site, db)
+        with ssh_client as ssh:
             scanner = SiteScanner(ssh)
             info = scanner.scan()
     except Exception as exc:
@@ -204,15 +246,17 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
 
     # Agent needs clarification before it can plan work
     if estimate.get("status") == "needs_clarification":
-        questions_text = "\n".join(estimate.get("questions", []))
+        questions = estimate.get("questions", [])
         task.status = "clarifying"
-        task.error_message = questions_text  # reuse field to store questions for clarify endpoint
+        task.error_message = "\n".join(questions)
+        # Start clarify_qa history with the first set of questions
+        task.clarify_qa = [{"questions": questions, "answer": None}]
         await db.commit()
         return ClarificationResponse(
             task_id=str(task.id),
             status="needs_clarification",
             summary=estimate.get("summary", ""),
-            questions=estimate.get("questions", []),
+            questions=questions,
         )
 
     task.title = estimate.get("title", payload.tz_text[:80])
@@ -258,16 +302,25 @@ async def clarify_task(
         await db.commit()
         raise HTTPException(status_code=500, detail=f"Clarification failed: {exc}") from exc
 
+    # Save user's answer into the last Q&A turn
+    qa = list(task.clarify_qa or [])
+    if qa and qa[-1].get("answer") is None:
+        qa[-1]["answer"] = payload.answers
+    else:
+        qa.append({"questions": [], "answer": payload.answers})
+
     # Still needs more clarification
     if estimate.get("status") == "needs_clarification":
-        questions_text = "\n".join(estimate.get("questions", []))
-        task.error_message = questions_text
+        new_questions = estimate.get("questions", [])
+        qa.append({"questions": new_questions, "answer": None})
+        task.clarify_qa = qa
+        task.error_message = "\n".join(new_questions)
         await db.commit()
         return ClarificationResponse(
             task_id=str(task.id),
             status="needs_clarification",
             summary=estimate.get("summary", ""),
-            questions=estimate.get("questions", []),
+            questions=new_questions,
         )
 
     task.title = estimate.get("title", task.tz_text[:80] if task.tz_text else "Задача")
@@ -275,6 +328,7 @@ async def clarify_task(
     task.estimated_credits = estimate.get("total_credits", 0)
     task.confidence = estimate.get("confidence", "medium")
     task.error_message = None
+    task.clarify_qa = qa
     task.status = "estimated"
     await db.commit()
 
@@ -339,7 +393,8 @@ async def rollback_task(site_id: str, task_id: str, user: CurrentUser, db: DB) -
         raise HTTPException(status_code=404, detail="Task not found")
 
     try:
-        with _build_ssh(site) as ssh:
+        ssh_client = await _build_ssh(site, db)
+        with ssh_client as ssh:
             bm = BackupManager(ssh)
             bm.restore_all(str(task.id))
     except Exception as exc:
