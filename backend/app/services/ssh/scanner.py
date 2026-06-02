@@ -434,16 +434,33 @@ class SiteScanner:
             "nginx -T 2>/dev/null | grep -E '^\\s*root ' | head -1 | awk '{print $2}' | tr -d ';' || echo ''"
         )
         if nginx_root:
-            return nginx_root
+            return self._resolve_source_root(nginx_root)
         apache_root = self._run(
             "apache2ctl -S 2>/dev/null | grep DocumentRoot | head -1 | awk '{print $2}' || echo ''"
         )
         if apache_root:
-            return apache_root
+            return self._resolve_source_root(apache_root)
         for path in ["/var/www/html", "/var/www/site", "/var/www/public_html"]:
             if self._run(f"[ -d '{path}' ] && echo yes || echo no") == "yes":
                 return path
         return "/var/www/html"
+
+    def _resolve_source_root(self, root: str) -> str:
+        """If root points to a build output dir (dist/build/.next), return the source root instead."""
+        root = root.rstrip("/")
+        last = root.split("/")[-1]
+        if last not in ("dist", "build", ".next", "public", "out"):
+            return root
+        parent = root.rsplit("/", 1)[0]
+        # Prefer parent if it has a package.json (JS project source root)
+        has_pkg = self._run(f"[ -f '{parent}/package.json' ] && echo yes || echo no")
+        if has_pkg == "yes":
+            return parent
+        # Or src/ sibling
+        has_src = self._run(f"[ -d '{parent}/src' ] && echo yes || echo no")
+        if has_src == "yes":
+            return parent
+        return root
 
     # ── CMS ───────────────────────────────────────────────────────────────────
 
@@ -469,11 +486,15 @@ class SiteScanner:
         if self._run(f"[ -f '{root}/next.config.ts' ] || [ -f '{root}/next.config.js' ] && echo yes || echo no") == "yes":
             return "nextjs", ""
         if self._run(f"[ -f '{root}/package.json' ] && echo yes || echo no") == "yes":
-            pkg = self._run(f"cat {root}/package.json 2>/dev/null | head -30")
+            pkg = self._run(f"cat {root}/package.json 2>/dev/null | head -50")
             if '"next"' in pkg:
                 return "nextjs", ""
+            if '"nuxt"' in pkg:
+                return "nuxt", ""
             if '"vue"' in pkg:
                 return "vue", ""
+            if '"vite"' in pkg:
+                return "vite", ""
             if '"react"' in pkg:
                 return "react", ""
         return "custom", ""

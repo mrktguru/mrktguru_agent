@@ -107,9 +107,11 @@ class TaskExecutor:
             if rc != 0 and err:
                 self._log(f"  ⚠ {err.strip()[:120]}", "running", idx)
 
-        # Step 6: Docker rebuild (if site runs in a container)
+        # Step 6: Rebuild — Docker or bare-metal JS framework
         if getattr(self._site, "is_docker", False) and getattr(self._site, "needs_rebuild", False):
             self._docker_rebuild(idx)
+        elif getattr(self._site, "needs_rebuild", False) and not getattr(self._site, "is_docker", False):
+            self._npm_rebuild(idx)
 
         # Step 7: Verify site is still up
         if self._site.url:
@@ -169,6 +171,21 @@ class TaskExecutor:
                     self._log(f"✅ Сервис готов", "success", subtask_index)
                     return
         self._log("⚠ Сервис долго стартует, проверьте вручную", "running", subtask_index)
+
+    def _npm_rebuild(self, subtask_index: int | None = None) -> None:
+        """Run npm run build for bare-metal Vite/React/Vue/Next.js projects."""
+        root = self._site.site_root_path or ""
+        if not root:
+            return
+        self._log(f"⚙ Пересобираю проект (npm run build)...", "running", subtask_index)
+        rc, out, err = self._ssh.run(
+            f"cd {root} && npm run build 2>&1 | tail -10",
+            timeout=300,
+        )
+        if rc != 0:
+            self._log(f"⚠ Сборка завершилась с ошибкой: {(out or err or '').strip()[-200:]}", "running", subtask_index)
+        else:
+            self._log(f"✅ Пересборка завершена", "success", subtask_index)
 
     def _read_files(self, files: list[str]) -> dict[str, str]:
         contents = {}
