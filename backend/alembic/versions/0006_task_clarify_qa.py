@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0006"
-down_revision = "0005"
+down_revision = "0005_docker_site_fields"
 branch_labels = None
 depends_on = None
 
