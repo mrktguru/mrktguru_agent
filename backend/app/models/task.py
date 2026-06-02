@@ -36,6 +36,9 @@ class Task(UUIDMixin, TimestampMixin, Base):
     # Status flow: pending → estimated → approved → running → done | failed | rolled_back
     status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
 
+    # Clarification dialog history: [{questions: [...], answer: str}]
+    clarify_qa: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     # Result
     changed_files: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     screenshot_before: Mapped[str | None] = mapped_column(Text, nullable=True)  # base64 or URL

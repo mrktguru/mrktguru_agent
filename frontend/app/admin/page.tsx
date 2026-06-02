@@ -10,6 +10,18 @@ type Stats = { users: number; sites: number; tasks: number; tokens_used: number 
 type AdminUser = { id: string; email: string; name: string | null; plan: string; is_admin: boolean; token_credits: number };
 type AdminSite = { id: string; name: string; url: string | null; status: string; cms: string | null; cms_version: string | null; owner_email: string };
 type AdminTask = { id: string; title: string | null; status: string; estimated_credits: number | null; actual_credits: number | null; owner_email: string; site_name: string; created_at: string | null };
+
+type DialogTurn =
+  | { role: "user"; type: "message"; text: string }
+  | { role: "agent"; type: "clarify"; questions: string[] }
+  | { role: "agent"; type: "estimate"; subtasks: any[]; total_credits: number | null; confidence: string | null }
+  | { role: "agent"; type: "logs"; status: string; entries: { status: string; message: string; timestamp: string | null }[] };
+
+type TaskDialog = {
+  task_id: string; title: string | null; status: string;
+  user_email: string; site_name: string; created_at: string | null;
+  turns: DialogTurn[];
+};
 type Layer = {
   layer_key: string; name: string; description: string | null; product: string;
   model: string; system_prompt: string; max_tokens: number; temperature: number;
@@ -250,32 +262,215 @@ function SitesSection() {
 /* ─── Tasks ──────────────────────────────────────────────────────────────── */
 function TasksSection() {
   const [tasks, setTasks] = useState<AdminTask[]>([]);
+  const [dialog, setDialog] = useState<TaskDialog | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+
   useEffect(() => { api.get<AdminTask[]>("/api/admin/tasks").then(({ data }) => setTasks(data)); }, []);
+
+  async function openDialog(taskId: string) {
+    setLoadingId(taskId);
+    try {
+      const { data } = await api.get<TaskDialog>(`/api/admin/tasks/${taskId}/dialog`);
+      setDialog(data);
+    } finally { setLoadingId(null); }
+  }
+
+  async function downloadDialog(taskId: string) {
+    const { data } = await api.get<string>(`/api/admin/tasks/${taskId}/dialog/export`, { responseType: "text" });
+    const blob = new Blob([data], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `dialog_${taskId.slice(0, 8)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
-    <div className="bg-surface rounded-2xl border border-border shadow-card overflow-hidden">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-xs text-text-muted border-b border-border">
-            <th className="px-4 py-3 font-medium">Задача</th>
-            <th className="px-4 py-3 font-medium">Сайт</th>
-            <th className="px-4 py-3 font-medium">Владелец</th>
-            <th className="px-4 py-3 font-medium">Кредиты</th>
-            <th className="px-4 py-3 font-medium">Статус</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {tasks.map((t) => (
-            <tr key={t.id} className="hover:bg-surface-2">
-              <td className="px-4 py-3 text-text-main max-w-xs truncate">{t.title || "—"}</td>
-              <td className="px-4 py-3 text-text-sub">{t.site_name}</td>
-              <td className="px-4 py-3 text-text-sub">{t.owner_email}</td>
-              <td className="px-4 py-3 text-text-sub">{t.actual_credits ?? t.estimated_credits ?? "—"}</td>
-              <td className="px-4 py-3"><span className={`text-xs font-medium ${STATUS_COLOR[t.status] || "text-text-muted"}`}>{t.status}</span></td>
+    <>
+      <div className="bg-surface rounded-2xl border border-border shadow-card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-text-muted border-b border-border">
+              <th className="px-4 py-3 font-medium">Задача</th>
+              <th className="px-4 py-3 font-medium">Сайт</th>
+              <th className="px-4 py-3 font-medium">Владелец</th>
+              <th className="px-4 py-3 font-medium">Кредиты</th>
+              <th className="px-4 py-3 font-medium">Статус</th>
+              <th className="px-4 py-3 font-medium"></th>
             </tr>
-          ))}
-          {tasks.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-text-muted">Нет задач</td></tr>}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {tasks.map((t) => (
+              <tr key={t.id} className="hover:bg-surface-2">
+                <td className="px-4 py-3 text-text-main max-w-xs truncate">{t.title || "—"}</td>
+                <td className="px-4 py-3 text-text-sub">{t.site_name}</td>
+                <td className="px-4 py-3 text-text-sub">{t.owner_email}</td>
+                <td className="px-4 py-3 text-text-sub">{t.actual_credits ?? t.estimated_credits ?? "—"}</td>
+                <td className="px-4 py-3"><span className={`text-xs font-medium ${STATUS_COLOR[t.status] || "text-text-muted"}`}>{t.status}</span></td>
+                <td className="px-4 py-3">
+                  <button
+                    onClick={() => openDialog(t.id)}
+                    disabled={loadingId === t.id}
+                    className="text-xs text-accent hover:underline disabled:opacity-40"
+                  >
+                    {loadingId === t.id ? "..." : "Диалог"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {tasks.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-text-muted">Нет задач</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {dialog && (
+        <DialogModal
+          dialog={dialog}
+          onClose={() => setDialog(null)}
+          onDownload={() => downloadDialog(dialog.task_id)}
+        />
+      )}
+    </>
+  );
+}
+
+/* ─── Dialog modal ───────────────────────────────────────────────────────── */
+function DialogModal({ dialog, onClose, onDownload }: {
+  dialog: TaskDialog; onClose: () => void; onDownload: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+
+      {/* Panel */}
+      <div className="relative ml-auto w-full max-w-2xl bg-surface h-full flex flex-col shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border flex-shrink-0">
+          <div className="min-w-0">
+            <h2 className="font-semibold text-text-main truncate">{dialog.title || "Диалог задачи"}</h2>
+            <p className="text-xs text-text-muted mt-0.5">{dialog.user_email} · {dialog.site_name} · {dialog.created_at ? new Date(dialog.created_at).toLocaleString("ru") : "—"}</p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+            <button
+              onClick={onDownload}
+              className="flex items-center gap-1.5 text-xs border border-border rounded-xl px-3 py-1.5 text-text-sub hover:text-text-main hover:bg-surface-2 transition-colors"
+            >
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                <path d="M6 1V8M3 5.5L6 8.5L9 5.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M1 10.5H11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+              </svg>
+              Скачать .txt
+            </button>
+            <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-2 text-text-muted hover:text-text-main transition-colors">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Thread */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+          {dialog.turns.map((turn, i) => {
+            if (turn.role === "user") {
+              return (
+                <div key={i} className="flex justify-end">
+                  <div className="bg-accent text-white rounded-2xl rounded-br-sm px-4 py-3 max-w-sm">
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{turn.text}</p>
+                  </div>
+                </div>
+              );
+            }
+
+            if (turn.type === "clarify") {
+              return (
+                <div key={i} className="flex gap-3 items-start">
+                  <AgentDot />
+                  <div className="bg-surface-2 border border-border rounded-2xl rounded-tl-sm px-4 py-3 flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-accent mb-2">Уточняющие вопросы</p>
+                    <ol className="space-y-1">
+                      {turn.questions.map((q, qi) => (
+                        <li key={qi} className="flex gap-2 text-sm text-text-main">
+                          <span className="text-accent font-semibold flex-shrink-0">{qi + 1}.</span>
+                          <span>{q}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                </div>
+              );
+            }
+
+            if (turn.type === "estimate") {
+              return (
+                <div key={i} className="flex gap-3 items-start">
+                  <AgentDot />
+                  <div className="bg-surface-2 border border-border rounded-2xl rounded-tl-sm px-4 py-3 flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-accent mb-2">
+                      План · {turn.confidence} · {(turn.total_credits || 0).toFixed(0)} кред.
+                    </p>
+                    <ol className="space-y-1.5">
+                      {turn.subtasks.map((st: any, si: number) => (
+                        <li key={si} className="text-sm text-text-main">
+                          <span className="font-medium">{si + 1}. {st.title}</span>
+                          {st.description && <span className="text-text-muted"> — {st.description}</span>}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                </div>
+              );
+            }
+
+            if (turn.type === "logs") {
+              const successes = turn.entries.filter(e => e.status === "success").length;
+              const errors = turn.entries.filter(e => e.status === "error").length;
+              return (
+                <div key={i} className="flex gap-3 items-start">
+                  <AgentDot />
+                  <div className="flex-1 min-w-0 border border-slate-200 rounded-2xl rounded-tl-sm overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-2.5 bg-white border-b border-slate-200">
+                      <span className={`w-2 h-2 rounded-full ${turn.status === "done" ? "bg-emerald-400" : "bg-red-400"}`}/>
+                      <span className="text-xs font-medium text-slate-600">
+                        {turn.status === "done" ? "Выполнено" : "Ошибка"} · {successes} ✓{errors > 0 ? ` · ${errors} ✗` : ""}
+                      </span>
+                    </div>
+                    <div className="px-4 py-3 bg-white font-mono text-xs space-y-1 max-h-52 overflow-y-auto">
+                      {turn.entries.map((e, ei) => (
+                        <div key={ei} className={`flex items-start gap-2 ${
+                          e.status === "success" ? "text-emerald-700" :
+                          e.status === "error" ? "text-red-600" : "text-slate-500"
+                        }`}>
+                          <span className="flex-shrink-0 w-3 text-center">{e.status === "success" ? "✓" : e.status === "error" ? "✗" : "·"}</span>
+                          <span className="break-all">{e.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            return null;
+          })}
+
+          {dialog.turns.length === 0 && (
+            <p className="text-sm text-text-muted text-center py-8">Диалог пуст</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentDot() {
+  return (
+    <div className="w-6 h-6 rounded-full bg-accent flex items-center justify-center flex-shrink-0 mt-0.5">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+        <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
+      </svg>
     </div>
   );
 }

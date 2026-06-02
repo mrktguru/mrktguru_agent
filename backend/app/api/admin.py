@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -134,6 +135,138 @@ async def list_tasks(_: AdminUser, db: DB) -> list[dict[str, Any]]:
         }
         for t, email, site_name in rows
     ]
+
+
+# ─── Task dialog ───────────────────────────────────────────────────────────────
+
+def _build_dialog(task: Task, logs: list[TaskLog]) -> list[dict[str, Any]]:
+    """Reconstruct the full conversation turns for a task."""
+    turns: list[dict[str, Any]] = []
+
+    # 1. User's original message
+    if task.tz_text:
+        turns.append({"role": "user", "type": "message", "text": task.tz_text})
+
+    # 2. Clarification Q&A rounds
+    for qa in (task.clarify_qa or []):
+        questions = qa.get("questions") or []
+        answer = qa.get("answer")
+        if questions:
+            turns.append({"role": "agent", "type": "clarify", "questions": questions})
+        if answer:
+            turns.append({"role": "user", "type": "message", "text": answer})
+
+    # 3. Agent's plan / estimate
+    if task.subtasks:
+        turns.append({
+            "role": "agent",
+            "type": "estimate",
+            "subtasks": task.subtasks,
+            "total_credits": task.estimated_credits,
+            "confidence": task.confidence,
+        })
+
+    # 4. Execution logs
+    if logs:
+        turns.append({
+            "role": "agent",
+            "type": "logs",
+            "status": task.status,
+            "entries": [
+                {"status": l.status, "message": l.message, "timestamp": l.created_at.isoformat() if l.created_at else None}
+                for l in logs
+            ],
+        })
+
+    return turns
+
+
+def _dialog_to_text(task: Task, turns: list[dict[str, Any]], user_email: str, site_name: str) -> str:
+    lines: list[str] = [
+        f"=== Диалог задачи: {task.title or task.tz_text or str(task.id)} ===",
+        f"Пользователь: {user_email}  |  Сайт: {site_name}  |  Статус: {task.status}",
+        f"Создано: {task.created_at.isoformat() if task.created_at else '—'}",
+        "",
+    ]
+    for t in turns:
+        if t["role"] == "user":
+            lines.append(f"[Пользователь]\n{t['text']}")
+        elif t["type"] == "clarify":
+            lines.append("[Агент — уточняющие вопросы]")
+            for i, q in enumerate(t["questions"], 1):
+                lines.append(f"  {i}. {q}")
+        elif t["type"] == "estimate":
+            lines.append(f"[Агент — план ({t.get('confidence','?')} уверенность, {t.get('total_credits', 0):.0f} кредитов)]")
+            for i, st in enumerate(t.get("subtasks", []), 1):
+                lines.append(f"  {i}. {st.get('title','')} — {st.get('description','')}")
+        elif t["type"] == "logs":
+            lines.append(f"[Выполнение — {t.get('status','?')}]")
+            for e in t.get("entries", []):
+                icon = "✓" if e["status"] == "success" else "✗" if e["status"] == "error" else "·"
+                lines.append(f"  {icon} {e.get('message','')}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@router.get("/tasks/{task_id}/dialog")
+async def get_task_dialog(_: AdminUser, task_id: str, db: DB) -> dict[str, Any]:
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    rows = await db.execute(
+        select(User.email, Site.name)
+        .join(User, User.id == task.user_id)
+        .join(Site, Site.id == task.site_id)
+    )
+    row = rows.first()
+    user_email = row[0] if row else "—"
+    site_name = row[1] if row else "—"
+
+    logs = list((await db.scalars(
+        select(TaskLog).where(TaskLog.task_id == task.id).order_by(TaskLog.created_at)
+    )).all())
+
+    turns = _build_dialog(task, logs)
+    return {
+        "task_id": str(task.id),
+        "title": task.title,
+        "status": task.status,
+        "user_email": user_email,
+        "site_name": site_name,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "turns": turns,
+    }
+
+
+@router.get("/tasks/{task_id}/dialog/export", response_class=PlainTextResponse)
+async def export_task_dialog(_: AdminUser, task_id: str, db: DB) -> PlainTextResponse:
+    task = await db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    rows = await db.execute(
+        select(User.email, Site.name)
+        .join(User, User.id == task.user_id)
+        .join(Site, Site.id == task.site_id)
+    )
+    row = rows.first()
+    user_email = row[0] if row else "—"
+    site_name = row[1] if row else "—"
+
+    logs = list((await db.scalars(
+        select(TaskLog).where(TaskLog.task_id == task.id).order_by(TaskLog.created_at)
+    )).all())
+
+    turns = _build_dialog(task, logs)
+    text = _dialog_to_text(task, turns, user_email, site_name)
+
+    safe_title = (task.title or task_id)[:40].replace("/", "-").replace(" ", "_")
+    filename = f"dialog_{safe_title}.txt"
+    return PlainTextResponse(
+        content=text,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ─── LLM layers ────────────────────────────────────────────────────────────────
