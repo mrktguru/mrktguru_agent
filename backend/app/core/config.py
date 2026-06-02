@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     # SSH
     PLATFORM_SSH_KEY_PATH: str = "/app/keys/platform_key"
 
+    # Backups (on the target site server). Persistent dir survives reboots; /tmp does not.
+    SITEDOC_BACKUP_DIR: str = "/var/lib/sitedoc/backups"
+    SITEDOC_BACKUP_RETENTION_DAYS: int = 30
+
     # Google OAuth (optional)
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

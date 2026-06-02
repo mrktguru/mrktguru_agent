@@ -30,6 +30,7 @@ class Task(UUIDMixin, TimestampMixin, Base):
 
     # Estimation
     estimated_credits: Mapped[float | None] = mapped_column(Float, nullable=True)
+    estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actual_credits: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[str | None] = mapped_column(String, nullable=True)  # high|medium|low
 
@@ -44,3 +45,6 @@ class Task(UUIDMixin, TimestampMixin, Base):
     screenshot_before: Mapped[str | None] = mapped_column(Text, nullable=True)  # base64 or URL
     screenshot_after: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # True after a successful run while file backups still exist (enables manual rollback).
+    backup_available: Mapped[bool] = mapped_column(default=False, nullable=False)

@@ -1,11 +1,16 @@
-"""BackupManager — create and restore tar.gz backups before/after site edits."""
+"""BackupManager — create and restore tar.gz backups before/after site edits.
+
+Backups live under a persistent dir (settings.SITEDOC_BACKUP_DIR) so they survive
+server reboots and /tmp cleanup, enabling manual rollback long after execution.
+"""
 from __future__ import annotations
 
 import shlex
 
+from app.core.config import settings
 from app.services.ssh.client import SSHClient
 
-BACKUP_BASE = "/tmp/sitedoc_backups"
+BACKUP_BASE = settings.SITEDOC_BACKUP_DIR
 
 
 class BackupManager:
@@ -43,11 +48,19 @@ class BackupManager:
             raise RuntimeError(f"Backup failed: {stderr}")
         return archive
 
+    def has_backups(self, task_id: str) -> bool:
+        """True if at least one subtask archive exists for the task."""
+        backup_dir = f"{BACKUP_BASE}/{task_id}"
+        _, stdout, _ = self._run(
+            f"ls {shlex.quote(backup_dir)}/subtask_*.tar.gz 2>/dev/null | head -1 || echo ''"
+        )
+        return bool(stdout.strip())
+
     def restore(self, task_id: str, subtask_index: int, site_root: str) -> None:
         """Restore a single subtask backup."""
         archive = f"{BACKUP_BASE}/{task_id}/subtask_{subtask_index}.tar.gz"
-        code, _, _ = self._run(f"[ -f {shlex.quote(archive)} ] && echo yes || echo no")
-        if _.strip() != "yes":
+        _, stdout, _ = self._run(f"[ -f {shlex.quote(archive)} ] && echo yes || echo no")
+        if stdout.strip() != "yes":
             return  # nothing to restore
         rc, _, stderr = self._run(f"tar xzf {shlex.quote(archive)} -C /", timeout=120)
         if rc != 0:
@@ -61,6 +74,8 @@ class BackupManager:
             [a.strip() for a in out.splitlines() if a.strip()],
             reverse=True,
         )
+        if not archives:
+            raise RuntimeError("Бэкапы для этой задачи не найдены — откат невозможен")
         for archive in archives:
             rc, _, stderr = self._run(f"tar xzf {shlex.quote(archive)} -C /", timeout=120)
             if rc != 0:

@@ -65,6 +65,8 @@ class TaskExecutor:
         # Update task
         self._task.changed_files = list(set(changed_files))
         self._task.status = "done"
+        # Backups are kept (not cleaned up) so the user can roll back manually.
+        self._task.backup_available = self._backup.has_backups(str(self._task.id))
         self._db.commit()
 
     def _execute_subtask(self, idx: int, subtask: dict) -> list[str]:
@@ -107,25 +109,41 @@ class TaskExecutor:
             if rc != 0 and err:
                 self._log(f"  ⚠ {err.strip()[:120]}", "running", idx)
 
-        # Step 6: Rebuild — Docker or bare-metal JS framework
-        if getattr(self._site, "is_docker", False) and getattr(self._site, "needs_rebuild", False):
-            self._docker_rebuild(idx)
-        elif getattr(self._site, "needs_rebuild", False) and not getattr(self._site, "is_docker", False):
-            self._npm_rebuild(idx)
-
-        # Step 7: Verify site is still up
-        if self._site.url:
-            self._log("🔍 Проверяю сайт...", "running", idx)
-            rc, out, _ = self._ssh.run(
-                f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 15 {self._site.url}", timeout=25
-            )
-            code = out.strip()
-            if code.startswith("2") or code.startswith("3"):
-                self._log(f"✅ Сайт отвечает ({code})", "success", idx)
-            else:
-                raise RuntimeError(f"Сайт вернул {code} после правок — откатываю")
+        # Step 6 + 7: Rebuild (if needed) and verify the site is still up
+        self.rebuild_and_verify(idx)
 
         return applied_files
+
+    def rebuild_and_verify(self, subtask_index: int | None = None) -> None:
+        """Rebuild the site so file changes take effect, then verify it responds.
+
+        Reusable both by normal execution and by manual rollback (after a
+        backup restore the running Docker/Next.js container must be rebuilt,
+        otherwise the restored sources are not served).
+        """
+        is_docker = bool(getattr(self._site, "is_docker", False))
+        needs_rebuild = bool(getattr(self._site, "needs_rebuild", False))
+
+        if is_docker and needs_rebuild:
+            self._docker_rebuild(subtask_index)  # builds, restarts and waits for health
+            return
+        if needs_rebuild and not is_docker:
+            self._npm_rebuild(subtask_index)
+
+        self._verify_up(subtask_index)
+
+    def _verify_up(self, subtask_index: int | None = None) -> None:
+        if not self._site.url:
+            return
+        self._log("🔍 Проверяю сайт...", "running", subtask_index)
+        rc, out, _ = self._ssh.run(
+            f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 15 {self._site.url}", timeout=25
+        )
+        code = out.strip()
+        if code.startswith("2") or code.startswith("3"):
+            self._log(f"✅ Сайт отвечает ({code})", "success", subtask_index)
+        else:
+            raise RuntimeError(f"Сайт вернул {code} после правок — откатываю")
 
     def _docker_rebuild(self, subtask_index: int | None = None) -> None:
         """Rebuild and restart the Docker service after source file changes."""

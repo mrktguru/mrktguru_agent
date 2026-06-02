@@ -69,16 +69,34 @@ class TaskEstimator:
         return "\n\n".join(lines)
 
     async def clarify(self, answers: str) -> dict:
-        """Re-estimate after user provided clarification answers."""
+        """Re-estimate after user provided clarification answers.
+
+        We rebuild the FULL clarification thread of *this* task (every prior
+        question/answer round from clarify_qa) so the agent keeps the entire
+        context of the active task between rounds — not just the last question.
+        Note: this context is scoped to a single task; history of *other* tasks
+        is never included, so token usage does not grow across tasks.
+        """
         site_context = self._build_site_context()
         original_tz = self._task.tz_text or ""
-        clarification_context = self._task.error_message or ""  # stores previous questions
 
-        combined_message = (
-            f"ТЗ:\n{original_tz}\n\n"
-            f"Уточняющие вопросы были:\n{clarification_context}\n\n"
-            f"Ответы пользователя:\n{answers}"
-        )
+        # Render all completed Q&A rounds; the last round (pending questions with
+        # answer=None) is paired with the answers just provided by the user.
+        thread_parts = [f"ТЗ:\n{original_tz}"]
+        qa_history = self._task.clarify_qa or []
+        for turn in qa_history:
+            questions = turn.get("questions") or []
+            answer = turn.get("answer")
+            if questions:
+                thread_parts.append(
+                    "Уточняющие вопросы:\n" + "\n".join(f"- {q}" for q in questions)
+                )
+            if answer:
+                thread_parts.append(f"Ответы пользователя:\n{answer}")
+        # Newest answer (for the last, still-unanswered round)
+        thread_parts.append(f"Ответы пользователя:\n{answers}")
+
+        combined_message = "\n\n".join(thread_parts)
         if self._task.reference_urls:
             combined_message += "\n\nРефересы (URL): " + ", ".join(self._task.reference_urls)
 

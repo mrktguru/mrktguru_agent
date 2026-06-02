@@ -111,12 +111,15 @@ class TaskPublic(BaseModel):
     status: str
     subtasks: list[dict] | None
     estimated_credits: float | None
+    estimated_minutes: int | None
     actual_credits: float | None
     confidence: str | None
+    clarify_qa: list[dict] | None  # [{questions: [...], answer: str|None}] — for thread rebuild
     changed_files: list[str] | None
     screenshot_before: str | None
     screenshot_after: str | None
     error_message: str | None
+    backup_available: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -131,12 +134,15 @@ class TaskPublic(BaseModel):
             status=t.status,
             subtasks=t.subtasks,
             estimated_credits=t.estimated_credits,
+            estimated_minutes=t.estimated_minutes,
             actual_credits=t.actual_credits,
             confidence=t.confidence,
+            clarify_qa=t.clarify_qa,
             changed_files=t.changed_files,
             screenshot_before=t.screenshot_before,
             screenshot_after=t.screenshot_after,
             error_message=t.error_message,
+            backup_available=bool(getattr(t, "backup_available", False)),
             created_at=t.created_at,
         )
 

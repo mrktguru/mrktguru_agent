@@ -262,6 +262,7 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
     task.title = estimate.get("title", payload.tz_text[:80])
     task.subtasks = estimate.get("subtasks", [])
     task.estimated_credits = estimate.get("total_credits", 0)
+    task.estimated_minutes = estimate.get("estimated_minutes", 10)
     task.confidence = estimate.get("confidence", "medium")
     task.status = "estimated"
     await db.commit()
@@ -326,6 +327,7 @@ async def clarify_task(
     task.title = estimate.get("title", task.tz_text[:80] if task.tz_text else "Задача")
     task.subtasks = estimate.get("subtasks", [])
     task.estimated_credits = estimate.get("total_credits", 0)
+    task.estimated_minutes = estimate.get("estimated_minutes", 10)
     task.confidence = estimate.get("confidence", "medium")
     task.error_message = None
     task.clarify_qa = qa
@@ -384,22 +386,26 @@ async def get_task_logs(site_id: str, task_id: str, user: CurrentUser, db: DB) -
 
 @router.post("/{site_id}/tasks/{task_id}/rollback", response_model=TaskPublic)
 async def rollback_task(site_id: str, task_id: str, user: CurrentUser, db: DB) -> TaskPublic:
-    """Rollback all changes made by a task."""
-    from app.services.ssh.backup import BackupManager
+    """Rollback all changes made by a task (restore files + rebuild + verify).
 
-    site = await _get_site_or_404(site_id, user.id, db)
+    Runs asynchronously in a Celery worker; progress streams over the task
+    WebSocket. The client should reconnect to /ws/tasks/{task_id} to watch it.
+    """
+    from app.tasks.execute import run_rollback
+
+    await _get_site_or_404(site_id, user.id, db)
     task = await db.get(Task, task_id)
     if not task or task.user_id != user.id:
         raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "done":
+        raise HTTPException(status_code=400, detail=f"Откат доступен только для завершённых задач (статус: {task.status})")
+    if not task.backup_available:
+        raise HTTPException(status_code=400, detail="Бэкап недоступен — откат невозможен")
 
-    try:
-        ssh_client = await _build_ssh(site, db)
-        with ssh_client as ssh:
-            bm = BackupManager(ssh)
-            bm.restore_all(str(task.id))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Rollback failed: {exc}") from exc
-
-    task.status = "rolled_back"
+    # Reflect the in-progress state immediately; the worker sets the final status.
+    task.status = "rolling_back"
     await db.commit()
+
+    run_rollback.delay(str(task.id))
+
     return TaskPublic.from_task(task)
