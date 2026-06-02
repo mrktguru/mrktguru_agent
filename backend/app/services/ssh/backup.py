@@ -30,8 +30,8 @@ class BackupManager:
         # Build file list — only files that actually exist on the server
         existing = []
         for f in files:
-            code, _, _ = self._run(f"[ -f {shlex.quote(f)} ] && echo yes || echo no")
-            if _.strip() == "yes" or code == 0:
+            _, stdout, _ = self._run(f"[ -f {shlex.quote(f)} ] && echo yes || echo no")
+            if stdout.strip() == "yes":
                 existing.append(f)
 
         if not existing:
