@@ -282,7 +282,13 @@ export default function NewProjectPage() {
         docker_compose_dir: selectedSite.docker_compose_dir || undefined,
         docker_container_name: selectedSite.docker_container_name || undefined,
       });
-      setScanLog((p) => [...p, "✓ Проект подключён"]);
+      setScanLog((p) => [...p, "✓ Проект подключён", "🔍 Сканирую структуру файлов..."]);
+      try {
+        await api.post(`/api/sites/${site.id}/scan`);
+        setScanLog((p) => [...p, "✓ Структура изучена"]);
+      } catch {
+        setScanLog((p) => [...p, "⚠ Скан не удался, продолжаем без файловой структуры"]);
+      }
 
       if (tzRaw.trim()) {
         setScanLog((p) => [...p, "🤖 Анализирую вашу задачу..."]);
