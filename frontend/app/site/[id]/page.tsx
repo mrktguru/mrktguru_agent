@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
+/* ─── Types ──────────────────────────────────────────────────────────────── */
 type Site = {
   id: string; name: string; url: string | null; status: string;
   cms: string | null; cms_version: string | null; web_server: string | null;
+  is_docker?: boolean; framework?: string;
 };
 
 type Subtask = {
@@ -30,188 +32,379 @@ type LogLine = {
   status: string; message: string; timestamp: string;
 };
 
-type Stage = "input" | "clarifying" | "estimated" | "running" | "done";
+// ── Chat message union ──────────────────────────────────────────────────────
+type MsgUser = { kind: "user"; text: string; attachments?: number; ref?: string };
+type MsgAnalyzing = { kind: "analyzing" };
+type MsgClarify = { kind: "clarify"; data: Clarification };
+type MsgEstimate = { kind: "estimate"; data: TaskEstimate; subtasks: Subtask[] };
+type MsgRunning = { kind: "running"; taskId: string };
+type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] };
+type MsgError = { kind: "error"; text: string };
+
+type ChatMsg = MsgUser | MsgAnalyzing | MsgClarify | MsgEstimate | MsgRunning | MsgDone | MsgError;
+
 type Tab = "tasks" | "audit" | "history";
+const RISK = { low: "bg-emerald-50 text-emerald-700 border-emerald-100", medium: "bg-amber-50 text-amber-700 border-amber-100", high: "bg-red-50 text-red-700 border-red-100" };
 
-const RISK_COLOR = { low: "text-emerald-600 bg-emerald-50", medium: "text-amber-600 bg-amber-50", high: "text-red-600 bg-red-50" };
-const LOG_COLOR: Record<string, string> = {
-  success: "text-emerald-600", error: "text-red-500",
-  rollback: "text-amber-600", running: "text-text-sub",
-};
-const LOG_ICON: Record<string, string> = {
-  success: "✓", error: "✗", rollback: "↩", running: "·",
-};
+// Pending clarification: { taskId, answered }
+type PendingClarify = { taskId: string } | null;
 
+/* ─── Agent avatar ────────────────────────────────────────────────────────── */
+function AgentAvatar() {
+  return (
+    <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center flex-shrink-0">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+        <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
+      </svg>
+    </div>
+  );
+}
+
+/* ─── Agent bubble wrapper ────────────────────────────────────────────────── */
+function AgentBubble({ children, label }: { children: React.ReactNode; label?: string }) {
+  return (
+    <div className="flex gap-3 items-start">
+      <AgentAvatar />
+      <div className="flex-1 min-w-0 bg-surface rounded-2xl rounded-tl-sm border border-border shadow-card px-4 py-3">
+        <p className="text-xs font-semibold text-accent mb-2">{label || "SiteDoc AI"}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Log block (light) ───────────────────────────────────────────────────── */
+function LogBlock({ logs, running, taskId, onRollback, onNew }: {
+  logs: LogLine[]; running: boolean;
+  taskId?: string; onRollback?: () => void; onNew?: () => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (logRef.current && running) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [logs, running]);
+
+  const successCount = logs.filter(l => l.status === "success").length;
+  const errorCount = logs.filter(l => l.status === "error").length;
+
+  return (
+    <div className="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 bg-white">
+        <div className="flex items-center gap-2">
+          {running ? (
+            <svg className="animate-spin text-accent" width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 10"/>
+            </svg>
+          ) : errorCount > 0 ? (
+            <span className="w-2.5 h-2.5 rounded-full bg-red-400"/>
+          ) : (
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400"/>
+          )}
+          <span className="text-xs font-medium text-gray-600">
+            {running ? "выполняется..." : `${successCount} успешно${errorCount > 0 ? ` · ${errorCount} ошибок` : ""}`}
+          </span>
+          {running && (
+            <span className="flex items-center gap-1 text-xs text-accent/70 ml-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse"/>
+              live
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => setCollapsed(v => !v)}
+          className="text-xs text-slate-400 hover:text-slate-600 transition-colors px-2 py-0.5 rounded-lg hover:bg-slate-100"
+        >
+          {collapsed ? "развернуть ▼" : "свернуть ▲"}
+        </button>
+      </div>
+
+      {/* Log lines */}
+      {!collapsed && (
+        <div ref={logRef} className="px-4 py-3 font-mono text-xs space-y-1.5 max-h-64 overflow-y-auto bg-white">
+          {logs.length === 0 && running && (
+            <div className="flex items-center gap-2 text-slate-400">
+              <svg className="animate-spin" width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1.2" strokeDasharray="12 8"/>
+              </svg>
+              <span>подключаюсь к серверу...</span>
+            </div>
+          )}
+          {logs.map((log, i) => (
+            <div key={i} className={`flex items-start gap-2 leading-relaxed ${
+              log.status === "success" ? "text-emerald-700" :
+              log.status === "error" ? "text-red-600" :
+              log.status === "rollback" ? "text-amber-600" :
+              log.message?.startsWith("━━━") ? "text-slate-700 font-medium" :
+              "text-slate-500"
+            }`}>
+              <span className="flex-shrink-0 select-none w-3 text-center">
+                {log.status === "success" ? "✓" : log.status === "error" ? "✗" :
+                 log.status === "rollback" ? "↩" : log.message?.startsWith("━━━") ? "▶" : "·"}
+              </span>
+              <span className="break-all">{log.message}</span>
+            </div>
+          ))}
+          {running && logs.length > 0 && (
+            <span className="text-gray-300 animate-pulse">█</span>
+          )}
+        </div>
+      )}
+
+      {/* Done actions */}
+      {!running && (onRollback || onNew) && (
+        <div className="px-4 py-2.5 border-t border-slate-200 bg-white flex gap-2">
+          {onRollback && (
+            <button onClick={onRollback} className="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-xl hover:bg-gray-50 transition-colors">
+              ↩ Откатить
+            </button>
+          )}
+          {onNew && (
+            <button onClick={onNew} className="text-xs text-white bg-accent hover:bg-accent-hover px-3 py-1.5 rounded-xl transition-colors">
+              Новая задача
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Main page ───────────────────────────────────────────────────────────── */
 export default function SitePage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("tasks");
   const [site, setSite] = useState<Site | null>(null);
-  const [tz, setTz] = useState("");
-  const [referenceUrl, setReferenceUrl] = useState("");
+
+  // Chat state
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [input, setInput] = useState("");
+  const [refUrl, setRefUrl] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
-  const [sending, setSending] = useState(false);
-  const [estimate, setEstimate] = useState<TaskEstimate | null>(null);
-  const [clarification, setClarification] = useState<Clarification | null>(null);
-  const [clarifyAnswer, setClarifyAnswer] = useState("");
-  const [subtasks, setSubtasks] = useState<Subtask[]>([]);
-  const [approving, setApproving] = useState(false);
-  const [logs, setLogs] = useState<LogLine[]>([]);
-  const [taskStatus, setTaskStatus] = useState("");
-  const [stage, setStage] = useState<Stage>("input");
-  const [loadingPending, setLoadingPending] = useState(false);
-  const logRef = useRef<HTMLDivElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [pendingClarify, setPendingClarify] = useState<PendingClarify>(null);
+
+  // Live log state per running task
+  const [runningLogs, setRunningLogs] = useState<Record<string, LogLine[]>>({});
   const wsRef = useRef<WebSocket | null>(null);
+
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { loadSite(); }, [id]);
   useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [logs]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, runningLogs]);
 
+  /* ── Load site ──────────────────────────────────────────────────────────── */
   async function loadSite() {
     try {
       const { data } = await api.get<Site>(`/api/sites/${id}`);
       setSite(data);
-      // Check if there's a pending task from onboarding quiz
-      const pendingTaskId = localStorage.getItem(`pendingTask_${id}`);
-      if (pendingTaskId) {
+      // Pending task from onboarding
+      const pendingId = localStorage.getItem(`pendingTask_${id}`);
+      if (pendingId) {
         localStorage.removeItem(`pendingTask_${id}`);
-        loadPendingTask(pendingTaskId);
+        loadPendingEstimate(pendingId);
       }
     } catch { router.push("/dashboard"); }
   }
 
-  async function loadPendingTask(taskId: string) {
-    setLoadingPending(true);
+  async function loadPendingEstimate(taskId: string) {
     try {
-      // Fetch the already-estimated task
-      const { data } = await api.get<TaskEstimate & { tz_text?: string }>(`/api/tasks/${taskId}`);
-      setEstimate({ task_id: taskId, subtasks: data.subtasks || [], total_credits: data.total_credits || 0, confidence: data.confidence || "medium", estimated_minutes: data.estimated_minutes || 10 });
-      setSubtasks((data.subtasks || []).map((s: Subtask) => ({ ...s, enabled: true })));
-      setStage("estimated");
-    } catch {
-      // Task might not be in the right format, ignore
-    } finally {
-      setLoadingPending(false);
-    }
+      const { data } = await api.get<TaskEstimate | Clarification>(`/api/tasks/${taskId}`);
+      if ((data as Clarification).status === "needs_clarification") {
+        const cl = data as Clarification;
+        push({ kind: "clarify", data: { ...cl, task_id: taskId } });
+        setPendingClarify({ taskId });
+      } else {
+        const est = data as TaskEstimate;
+        const subs = (est.subtasks || []).map((s: Subtask) => ({ ...s, enabled: true }));
+        push({ kind: "estimate", data: { ...est, task_id: taskId }, subtasks: subs });
+      }
+    } catch {}
   }
 
-  async function handleSubmitTz(e: React.FormEvent) {
-    e.preventDefault();
-    if (!tz.trim()) return;
-    setSending(true);
+  /* ── Push message ──────────────────────────────────────────────────────── */
+  function push(msg: ChatMsg) {
+    setMessages(p => [...p, msg]);
+  }
+
+  function replaceLast(msg: ChatMsg) {
+    setMessages(p => [...p.slice(0, -1), msg]);
+  }
+
+  /* ── Submit (new task OR clarification answer) ─────────────────────────── */
+  async function handleSend(e?: React.FormEvent) {
+    e?.preventDefault();
+    const text = input.trim();
+    if (!text || busy) return;
+
+    // If we're waiting for a clarification answer — route there
+    if (pendingClarify) {
+      const { taskId } = pendingClarify;
+      push({ kind: "user", text });
+      push({ kind: "analyzing" });
+      setInput("");
+      setBusy(true);
+
+      try {
+        const { data } = await api.post<TaskEstimate | Clarification>(
+          `/api/sites/${id}/tasks/${taskId}/clarify`,
+          { answers: text }
+        );
+        if ((data as Clarification).status === "needs_clarification") {
+          const cl = data as Clarification;
+          replaceLast({ kind: "clarify", data: cl });
+          setPendingClarify({ taskId: cl.task_id });
+        } else {
+          const est = data as TaskEstimate;
+          replaceLast({ kind: "estimate", data: est, subtasks: est.subtasks.map(s => ({ ...s, enabled: true })) });
+          setPendingClarify(null);
+        }
+      } catch (err: any) {
+        replaceLast({ kind: "error", text: err?.response?.data?.detail || "Ошибка" });
+        setPendingClarify(null);
+      } finally { setBusy(false); inputRef.current?.focus(); }
+      return;
+    }
+
+    // New task
+    push({ kind: "user", text, attachments: attachments.length || undefined, ref: refUrl || undefined });
+    push({ kind: "analyzing" });
+    setInput(""); setRefUrl(""); setAttachments([]);
+    setBusy(true);
+
     try {
       const { data } = await api.post<TaskEstimate | Clarification>(`/api/sites/${id}/tasks`, {
-        tz_text: tz,
-        reference_urls: referenceUrl ? [referenceUrl] : undefined,
+        tz_text: text,
+        reference_urls: refUrl ? [refUrl] : undefined,
         attachments: attachments.length ? attachments : undefined,
       });
       if ((data as Clarification).status === "needs_clarification") {
-        setClarification(data as Clarification);
-        setClarifyAnswer("");
-        setStage("clarifying");
+        const cl = data as Clarification;
+        replaceLast({ kind: "clarify", data: cl });
+        setPendingClarify({ taskId: cl.task_id });
       } else {
         const est = data as TaskEstimate;
-        setEstimate(est);
-        setSubtasks(est.subtasks.map((s) => ({ ...s, enabled: true })));
-        setStage("estimated");
+        const subs = est.subtasks.map(s => ({ ...s, enabled: true }));
+        replaceLast({ kind: "estimate", data: est, subtasks: subs });
+        setPendingClarify(null);
       }
     } catch (err: any) {
-      alert(err?.response?.data?.detail || "Ошибка анализа ТЗ");
-    } finally { setSending(false); }
+      replaceLast({ kind: "error", text: err?.response?.data?.detail || "Ошибка анализа" });
+      setPendingClarify(null);
+    } finally { setBusy(false); inputRef.current?.focus(); }
   }
 
-  async function handleSubmitClarification(e: React.FormEvent) {
-    e.preventDefault();
-    if (!clarifyAnswer.trim() || !clarification) return;
-    setSending(true);
+  /* ── Toggle subtask ─────────────────────────────────────────────────────── */
+  function toggleSubtask(msgIdx: number, taskId: string) {
+    setMessages(prev => prev.map((m, i) => {
+      if (i !== msgIdx || m.kind !== "estimate") return m;
+      const updated = m.subtasks.map(s => s.id === taskId ? { ...s, enabled: !s.enabled } : s);
+      return { ...m, subtasks: updated };
+    }));
+  }
+
+  /* ── Approve ────────────────────────────────────────────────────────────── */
+  async function handleApprove(msgIdx: number, est: TaskEstimate, subtasks: Subtask[]) {
+    if (busy) return;
+    const enabledIds = subtasks.filter(s => s.enabled).map(s => s.id);
+    setBusy(true);
+    setPendingClarify(null);
     try {
-      const { data } = await api.post<TaskEstimate | Clarification>(
-        `/api/sites/${id}/tasks/${clarification.task_id}/clarify`,
-        { answers: clarifyAnswer }
-      );
-      if ((data as Clarification).status === "needs_clarification") {
-        setClarification(data as Clarification);
-        setClarifyAnswer("");
-      } else {
-        const est = data as TaskEstimate;
-        setEstimate(est);
-        setSubtasks(est.subtasks.map((s) => ({ ...s, enabled: true })));
-        setClarification(null);
-        setStage("estimated");
-      }
+      await api.post(`/api/sites/${id}/tasks/${est.task_id}/approve`, enabledIds);
+      push({ kind: "running", taskId: est.task_id });
+      setRunningLogs(p => ({ ...p, [est.task_id]: [] }));
+      startWs(est.task_id);
     } catch (err: any) {
-      alert(err?.response?.data?.detail || "Ошибка");
-    } finally { setSending(false); }
+      push({ kind: "error", text: err?.response?.data?.detail || "Ошибка запуска" });
+      setBusy(false);
+    }
   }
 
-  async function handleApprove() {
-    if (!estimate) return;
-    setApproving(true);
-    try {
-      const enabledIds = subtasks.filter((s) => s.enabled).map((s) => s.id);
-      await api.post(`/api/sites/${id}/tasks/${estimate.task_id}/approve`, enabledIds);
-      setStage("running");
-      startWs(estimate.task_id);
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || "Ошибка запуска");
-    } finally { setApproving(false); }
-  }
-
+  /* ── WebSocket ──────────────────────────────────────────────────────────── */
   function startWs(taskId: string) {
     const token = localStorage.getItem("token");
     const wsBase = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
     const ws = new WebSocket(`${wsBase}/ws/tasks/${taskId}?token=${token}`);
     wsRef.current = ws;
+
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === "log") setLogs((p) => [...p, msg]);
-      else if (msg.type === "task_complete") {
-        setTaskStatus(msg.status);
-        setStage("done");
+      if (msg.type === "log") {
+        setRunningLogs(p => ({ ...p, [taskId]: [...(p[taskId] || []), msg] }));
+      } else if (msg.type === "task_complete") {
+        setRunningLogs(p => {
+          const logs = p[taskId] || [];
+          // Replace running message with done
+          setMessages(prev => prev.map(m =>
+            m.kind === "running" && m.taskId === taskId
+              ? { kind: "done", status: msg.status, taskId, logs }
+              : m
+          ));
+          return p;
+        });
+        setBusy(false);
         ws.close();
       }
     };
+    ws.onerror = () => {
+      setMessages(prev => prev.map(m =>
+        m.kind === "running" && m.taskId === taskId
+          ? { kind: "error", text: "WebSocket disconnected" }
+          : m
+      ));
+      setBusy(false);
+    };
   }
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    Array.from(e.target.files || []).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
+  /* ── Rollback ───────────────────────────────────────────────────────────── */
+  async function handleRollback(taskId: string) {
+    if (!confirm("Откатить все изменения по этой задаче?")) return;
+    try {
+      await api.post(`/api/sites/${id}/tasks/${taskId}/rollback`);
+      push({ kind: "error", text: "Изменения откатены" });
+    } catch (err: any) {
+      push({ kind: "error", text: err?.response?.data?.detail || "Ошибка отката" });
+    }
+  }
+
+  /* ── File ───────────────────────────────────────────────────────────────── */
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    Array.from(e.target.files || []).forEach(file => {
+      const r = new FileReader();
+      r.onload = ev => {
         const b64 = (ev.target?.result as string).split(",")[1];
-        setAttachments((p) => [...p, b64]);
+        setAttachments(p => [...p, b64]);
       };
-      reader.readAsDataURL(file);
+      r.readAsDataURL(file);
     });
   }
 
-  async function handleRollback() {
-    if (!estimate || !confirm("Откатить все изменения?")) return;
-    await api.post(`/api/sites/${id}/tasks/${estimate.task_id}/rollback`);
-    resetAll();
+  /* ── Keyboard ───────────────────────────────────────────────────────────── */
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend();
   }
 
-  function resetAll() {
-    setStage("input"); setTz(""); setReferenceUrl(""); setAttachments([]);
-    setEstimate(null); setClarification(null); setClarifyAnswer("");
-    setSubtasks([]); setLogs([]); setTaskStatus("");
-  }
+  const canType = !busy;
+  const inputPlaceholder = busy
+    ? "Ожидаю ответа агента..."
+    : pendingClarify
+    ? "Ответьте на вопросы агента... (⌘↵ отправить)"
+    : "Опишите задачу или ответьте на вопрос... (⌘↵ отправить)";
 
-  const totalEnabled = subtasks.filter((s) => s.enabled).reduce((a, s) => a + s.estimated_credits, 0);
-
-  const TABS = [
-    { key: "tasks" as Tab, icon: "💬", label: "Задачи" },
-    { key: "audit" as Tab, icon: "🔍", label: "Аудит" },
-    { key: "history" as Tab, icon: "📋", label: "История" },
-  ];
-
+  /* ── Render ─────────────────────────────────────────────────────────────── */
   return (
     <div className="flex h-screen overflow-hidden bg-surface-2">
 
-      {/* Sidebar */}
-      <aside className="w-56 bg-surface border-r border-border flex flex-col">
-        {/* Logo */}
-        <div className="px-4 py-4 border-b border-border flex items-center gap-2">
+      {/* ── Sidebar ── */}
+      <aside className="w-56 bg-surface border-r border-border flex flex-col flex-shrink-0">
+        <div className="px-4 py-4 border-b border-border flex items-center gap-2 h-[57px]">
           <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
               <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
@@ -220,399 +413,224 @@ export default function SitePage() {
           <span className="font-semibold text-sm text-text-main">SiteDoc</span>
         </div>
 
-        {/* Back */}
-        <button
-          onClick={() => router.push("/dashboard")}
-          className="flex items-center gap-2 px-4 py-2.5 text-xs text-text-muted hover:text-text-main hover:bg-surface-2 transition-colors mx-2 mt-2 rounded-xl"
-        >
+        <button onClick={() => router.push("/dashboard")}
+          className="flex items-center gap-2 px-4 py-2.5 text-xs text-text-muted hover:text-text-main hover:bg-surface-2 transition-colors mx-2 mt-2 rounded-xl">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <path d="M7.5 9.5L4 6L7.5 2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
           Все сайты
         </button>
 
-        {/* Site info */}
         {site && (
           <div className="mx-2 mt-1 px-3 py-3 bg-surface-2 rounded-xl border border-border">
             <div className="flex items-center gap-1.5 mb-0.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${site.status === "active" ? "bg-emerald-400" : "bg-red-400"}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${site.status === "active" ? "bg-emerald-400" : "bg-red-400"}`}/>
               <span className="text-xs font-medium text-text-main truncate">{site.name}</span>
             </div>
-            {site.cms && <span className="text-xs text-text-muted">{site.cms}{site.cms_version ? ` ${site.cms_version}` : ""}</span>}
+            <div className="flex flex-wrap gap-1 mt-1">
+              {site.cms && <span className="text-[10px] text-text-muted">{site.cms}</span>}
+              {site.is_docker && <span className="text-[10px] text-blue-500">Docker</span>}
+              {site.framework && <span className="text-[10px] text-purple-500">{site.framework}</span>}
+            </div>
           </div>
         )}
 
-        {/* Nav tabs */}
         <nav className="flex-1 px-2 mt-3 space-y-0.5">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
+          {(["tasks", "audit", "history"] as Tab[]).map((t) => (
+            <button key={t} onClick={() => setTab(t)}
               className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm transition-colors ${
-                tab === t.key
-                  ? "bg-accent text-white font-medium"
-                  : "text-text-sub hover:bg-surface-2 hover:text-text-main"
-              }`}
-            >
-              <span className="text-base leading-none">{t.icon}</span>
-              {t.label}
+                tab === t ? "bg-accent text-white font-medium" : "text-text-sub hover:bg-surface-2 hover:text-text-main"
+              }`}>
+              <span className="text-base leading-none">
+                {t === "tasks" ? "💬" : t === "audit" ? "🔍" : "📋"}
+              </span>
+              {t === "tasks" ? "Задачи" : t === "audit" ? "Аудит" : "История"}
             </button>
           ))}
         </nav>
       </aside>
 
-      {/* Main content */}
+      {/* ── Main ── */}
       <main className="flex-1 flex flex-col overflow-hidden">
-
         {tab === "tasks" && (
           <>
-            {/* Chat/log area */}
-            <div ref={logRef} className="flex-1 overflow-y-auto p-6">
+            {/* Chat thread */}
+            <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
 
-              {/* Loading pending task from onboarding */}
-              {loadingPending && (
-                <div className="max-w-xl mx-auto flex flex-col items-center justify-center mt-20 gap-3">
-                  <svg className="animate-spin text-accent" width="24" height="24" viewBox="0 0 24 24" fill="none">
-                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" strokeDasharray="40 20"/>
-                  </svg>
-                  <p className="text-sm text-text-sub">Загружаю анализ вашего ТЗ...</p>
-                </div>
-              )}
-
-              {stage === "input" && !loadingPending && (
-                <div className="max-w-xl mx-auto text-center mt-16">
-                  <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-4">
-                    <span className="text-2xl">✏️</span>
+              {/* Empty state */}
+              {messages.length === 0 && (
+                <div className="max-w-xl mx-auto text-center mt-20">
+                  <div className="w-14 h-14 rounded-3xl bg-accent/10 flex items-center justify-center mx-auto mb-5">
+                    <span className="text-3xl">✏️</span>
                   </div>
                   <h2 className="text-lg font-semibold text-text-main mb-2">Опишите задачу</h2>
-                  <p className="text-sm text-text-muted">Вставьте ТЗ или напишите что нужно изменить на сайте</p>
+                  <p className="text-sm text-text-muted leading-relaxed">
+                    Напишите что нужно изменить на сайте.<br/>
+                    Можно вставить ТЗ целиком — агент разберётся.
+                  </p>
                 </div>
               )}
 
-              {/* ── Clarification flow ── */}
-              {stage === "clarifying" && clarification && (
-                <div className="max-w-2xl mx-auto space-y-4">
-                  {/* User's original message */}
-                  <div className="flex justify-end">
-                    <div className="bg-accent text-white rounded-2xl rounded-br-sm px-4 py-3 max-w-lg">
-                      <p className="text-sm">{tz}</p>
-                    </div>
-                  </div>
+              {/* Message thread */}
+              {messages.map((msg, idx) => (
+                <div key={idx} className="max-w-2xl mx-auto w-full">
 
-                  {/* Agent clarification bubble */}
-                  <div className="flex gap-3">
-                    <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center flex-shrink-0 mt-0.5">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                        <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                    <div className="bg-surface rounded-2xl rounded-tl-sm border border-border shadow-card px-4 py-3 flex-1">
-                      <p className="text-xs font-semibold text-accent mb-2">SiteDoc AI</p>
-                      {clarification.summary && (
-                        <p className="text-sm text-text-sub mb-3 pb-3 border-b border-border">{clarification.summary}</p>
-                      )}
-                      <p className="text-sm font-medium text-text-main mb-2">Уточните, пожалуйста:</p>
-                      <ol className="space-y-1.5 mb-1">
-                        {clarification.questions.map((q, i) => (
-                          <li key={i} className="flex gap-2 text-sm text-text-main">
-                            <span className="text-accent font-semibold flex-shrink-0">{i + 1}.</span>
-                            <span>{q}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-                  </div>
-
-                  {/* Answer input */}
-                  <form onSubmit={handleSubmitClarification} className="ml-10">
-                    <textarea
-                      className="w-full border border-border rounded-xl px-3.5 py-3 text-sm bg-surface-2 text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors resize-none h-24"
-                      placeholder="Ваш ответ..."
-                      value={clarifyAnswer}
-                      onChange={(e) => setClarifyAnswer(e.target.value)}
-                      autoFocus
-                    />
-                    <div className="flex items-center justify-between mt-2">
-                      <button type="button" onClick={resetAll} className="text-sm text-text-muted hover:text-text-main">
-                        ← Начать заново
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={sending || !clarifyAnswer.trim()}
-                        className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-sm font-medium px-5 py-2 rounded-xl transition-colors flex items-center gap-2"
-                      >
-                        {sending ? (
-                          <>
-                            <svg className="animate-spin" width="12" height="12" viewBox="0 0 12 12" fill="none">
-                              <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 10"/>
-                            </svg>
-                            Анализирую...
-                          </>
-                        ) : "Ответить →"}
-                      </button>
-                    </div>
-                  </form>
-                </div>
-              )}
-
-              {stage === "estimated" && estimate && (
-                <div className="max-w-2xl mx-auto space-y-4">
-                  {/* Agent summary bubble */}
-                  <div className="flex gap-3">
-                    <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center flex-shrink-0 mt-0.5">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                        <path d="M12 3L20 7.5V16.5L12 21L4 16.5V7.5L12 3Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                    <div className="bg-surface rounded-2xl rounded-tl-sm border border-border shadow-card px-4 py-3 flex-1">
-                      <p className="text-xs font-semibold text-accent mb-2">SiteDoc AI</p>
-                      <p className="text-sm text-text-main leading-relaxed mb-3">
-                        Я изучил ваше ТЗ и проанализировал структуру сайта.
-                        Нашёл <strong>{subtasks.length} задач{subtasks.length === 1 ? "у" : subtasks.length < 5 ? "и" : ""}</strong> для выполнения.
-                        Проверьте список ниже — снимите галочки с того, что пока не нужно, и нажмите <strong>«Запустить»</strong>.
-                      </p>
-                      <div className="flex flex-wrap gap-2 text-xs">
-                        <span className="bg-surface-2 border border-border text-text-sub px-2 py-1 rounded-lg">
-                          ~{estimate.estimated_minutes} мин
-                        </span>
-                        <span className="bg-surface-2 border border-border text-text-sub px-2 py-1 rounded-lg">
-                          {estimate.total_credits.toFixed(0)} кредитов
-                        </span>
-                        <span className={`px-2 py-1 rounded-lg border ${
-                          estimate.confidence === "high" ? "bg-emerald-50 border-emerald-100 text-emerald-700" :
-                          estimate.confidence === "medium" ? "bg-amber-50 border-amber-100 text-amber-700" :
-                          "bg-red-50 border-red-100 text-red-600"
-                        }`}>
-                          {estimate.confidence === "high" ? "✓ Высокая точность" : estimate.confidence === "medium" ? "~ Средняя точность" : "⚠ Низкая точность — уточните ТЗ"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Subtasks card */}
-                  <div className="ml-10">
-                    <div className="flex items-center gap-2 mb-2 px-1">
-                      <p className="text-xs font-semibold text-text-sub uppercase tracking-wide">Задачи</p>
-                    </div>
-
-                  <div className="bg-surface rounded-2xl border border-border shadow-card overflow-hidden">
-                    <div className="divide-y divide-border">
-                      {subtasks.map((st) => (
-                        <label key={st.id} className={`flex items-start gap-3 px-4 py-3.5 cursor-pointer transition-colors ${st.enabled ? "bg-surface hover:bg-surface-2" : "bg-surface-2 opacity-60"}`}>
-                          <input
-                            type="checkbox" checked={st.enabled}
-                            onChange={() => setSubtasks((p) => p.map((s) => s.id === st.id ? { ...s, enabled: !s.enabled } : s))}
-                            className="mt-0.5 accent-accent"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between gap-2 mb-0.5">
-                              <span className="text-sm font-medium text-text-main">{st.title}</span>
-                              <span className="text-xs text-text-sub flex-shrink-0">~{st.estimated_credits} кред.</span>
-                            </div>
-                            <p className="text-xs text-text-muted mb-1.5">{st.description}</p>
-                            <div className="flex items-center gap-2">
-                              {st.files_to_touch[0] && (
-                                <span className="text-xs font-mono text-text-muted bg-surface-3 px-1.5 py-0.5 rounded-md truncate max-w-xs">
-                                  {st.files_to_touch[0].split("/").pop()}
-                                </span>
-                              )}
-                              <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${RISK_COLOR[st.risk]}`}>
-                                {st.risk === "low" ? "низкий риск" : st.risk === "medium" ? "средний" : "высокий риск"}
-                              </span>
-                            </div>
+                  {/* User message */}
+                  {msg.kind === "user" && (
+                    <div className="flex justify-end">
+                      <div className="bg-accent text-white rounded-2xl rounded-br-sm px-4 py-3 max-w-lg">
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                        {(msg.attachments || msg.ref) && (
+                          <div className="mt-2 flex gap-2 text-white/60 text-xs">
+                            {msg.ref && <span>🔗 {msg.ref}</span>}
+                            {msg.attachments && <span>📎 {msg.attachments} файл(а)</span>}
                           </div>
-                        </label>
-                      ))}
-                    </div>
-
-                    {/* Summary */}
-                    <div className="bg-surface-2 border-t border-border px-4 py-3 flex items-center justify-between gap-4">
-                      <div className="text-sm text-text-sub">
-                        <span className="font-semibold text-text-main">{totalEnabled.toFixed(0)} кредитов</span>
-                        <span className="mx-1">·</span>
-                        <span>~{estimate.estimated_minutes} мин</span>
-                        <span className="mx-1">·</span>
-                        <span className={
-                          estimate.confidence === "high" ? "text-emerald-600" :
-                          estimate.confidence === "medium" ? "text-amber-600" : "text-red-600"
-                        }>
-                          {estimate.confidence === "high" ? "высокая точность" : estimate.confidence === "medium" ? "средняя точность" : "низкая точность"}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button onClick={resetAll} className="text-sm text-text-sub hover:text-text-main px-3 py-1.5 rounded-xl hover:bg-surface-3 transition-colors">
-                          Отмена
-                        </button>
-                        <button
-                          onClick={handleApprove}
-                          disabled={approving || subtasks.filter((s) => s.enabled).length === 0}
-                          className="bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded-xl transition-colors"
-                        >
-                          {approving ? "Запускаю..." : "Запустить"}
-                        </button>
+                        )}
                       </div>
                     </div>
-                  </div>
-                  </div>
-                </div>
-              )}
+                  )}
 
-              {(stage === "running" || stage === "done") && (
-                <div className="max-w-2xl mx-auto space-y-3">
-                  {/* Status header */}
-                  <div className="flex gap-3">
-                    <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${stage === "done" && taskStatus === "done" ? "bg-emerald-100" : stage === "done" ? "bg-red-100" : "bg-accent/10"}`}>
-                      {stage === "running" ? (
+                  {/* Analyzing spinner */}
+                  {msg.kind === "analyzing" && (
+                    <div className="flex gap-3 items-center">
+                      <AgentAvatar />
+                      <div className="flex items-center gap-2 bg-surface border border-border rounded-2xl rounded-tl-sm px-4 py-3 shadow-card">
                         <svg className="animate-spin text-accent" width="14" height="14" viewBox="0 0 14 14" fill="none">
                           <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20 14"/>
                         </svg>
-                      ) : taskStatus === "done" ? (
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                          <path d="M2.5 7L6 10.5L11.5 4" stroke="#10b981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                      ) : (
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                          <path d="M4 4L10 10M10 4L4 10" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round"/>
-                        </svg>
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <p className={`text-sm font-semibold ${stage === "running" ? "text-text-main" : taskStatus === "done" ? "text-emerald-700" : "text-red-600"}`}>
-                        {stage === "running" ? "Выполняю задачи..." : taskStatus === "done" ? "Все задачи выполнены" : "Завершено с ошибками"}
-                      </p>
-                      <p className="text-xs text-text-muted mt-0.5">
-                        {stage === "running" ? `${logs.length} шагов выполнено` : `${logs.filter(l => l.status === "success").length} успешно · ${logs.filter(l => l.status === "error").length} ошибок`}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Log terminal */}
-                  <div className="bg-gray-950 rounded-2xl overflow-hidden">
-                    {/* Terminal header */}
-                    <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-white/5">
-                      <span className="w-2.5 h-2.5 rounded-full bg-red-500/60"/>
-                      <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/60"/>
-                      <span className="w-2.5 h-2.5 rounded-full bg-green-500/60"/>
-                      <span className="ml-2 text-xs text-white/30">выполнение задач</span>
-                      {stage === "running" && (
-                        <span className="ml-auto flex items-center gap-1 text-xs text-white/30">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>
-                          live
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Log lines */}
-                    <div className="px-4 py-3 font-mono text-xs space-y-1.5 max-h-72 overflow-y-auto">
-                      {logs.length === 0 && stage === "running" && (
-                        <div className="flex items-center gap-2 text-white/30">
-                          <svg className="animate-spin" width="10" height="10" viewBox="0 0 10 10" fill="none">
-                            <circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1.2" strokeDasharray="12 8"/>
-                          </svg>
-                          <span>подключаюсь к серверу...</span>
-                        </div>
-                      )}
-                      {logs.map((log, i) => (
-                        <div key={i} className={`flex items-start gap-2 leading-relaxed ${
-                          log.status === "success" ? "text-emerald-400" :
-                          log.status === "error" ? "text-red-400" :
-                          log.status === "rollback" ? "text-yellow-400" :
-                          log.message?.startsWith("━━━") ? "text-white/80 mt-2" :
-                          "text-white/50"
-                        }`}>
-                          <span className="flex-shrink-0 select-none">
-                            {log.status === "success" ? "✓" :
-                             log.status === "error" ? "✗" :
-                             log.status === "rollback" ? "↩" :
-                             log.message?.startsWith("━━━") ? "▶" : "·"}
-                          </span>
-                          <span className="break-all">{log.message}</span>
-                        </div>
-                      ))}
-                      {stage === "running" && logs.length > 0 && (
-                        <div className="flex items-center gap-1 text-white/20 mt-1">
-                          <span className="animate-pulse">█</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Done actions */}
-                  {stage === "done" && (
-                    <div className="flex gap-2 pt-1">
-                      <button
-                        onClick={handleRollback}
-                        className="text-sm text-text-sub border border-border px-3 py-1.5 rounded-xl hover:bg-surface-2 transition-colors"
-                      >
-                        ↩ Откатить изменения
-                      </button>
-                      <button
-                        onClick={resetAll}
-                        className="text-sm text-white bg-accent hover:bg-accent-hover px-4 py-1.5 rounded-xl transition-colors"
-                      >
-                        Новая задача
-                      </button>
+                        <span className="text-sm text-text-muted">Анализирую...</span>
+                      </div>
                     </div>
                   )}
+
+                  {/* Error */}
+                  {msg.kind === "error" && (
+                    <div className="flex gap-3 items-start">
+                      <AgentAvatar />
+                      <div className="bg-red-50 border border-red-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-red-600">
+                        {msg.text}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Clarification */}
+                  {msg.kind === "clarify" && (
+                    <ClarifyMsg
+                      data={msg.data}
+                      isLatest={idx === messages.length - 1}
+                    />
+                  )}
+
+                  {/* Estimate */}
+                  {msg.kind === "estimate" && (
+                    <EstimateMsg
+                      msgIdx={idx}
+                      est={msg.data}
+                      subtasks={msg.subtasks}
+                      busy={busy}
+                      isLatest={idx === messages.length - 1}
+                      onToggle={(taskId) => toggleSubtask(idx, taskId)}
+                      onApprove={() => handleApprove(idx, msg.data, msg.subtasks)}
+                    />
+                  )}
+
+                  {/* Running */}
+                  {msg.kind === "running" && (
+                    <AgentBubble label="SiteDoc AI — выполняю">
+                      <LogBlock
+                        logs={runningLogs[msg.taskId] || []}
+                        running={true}
+                      />
+                    </AgentBubble>
+                  )}
+
+                  {/* Done */}
+                  {msg.kind === "done" && (
+                    <AgentBubble label={msg.status === "done" ? "SiteDoc AI — выполнено ✓" : "SiteDoc AI — завершено с ошибками"}>
+                      <LogBlock
+                        logs={msg.logs}
+                        running={false}
+                        taskId={msg.taskId}
+                        onRollback={() => handleRollback(msg.taskId)}
+                        onNew={() => inputRef.current?.focus()}
+                      />
+                    </AgentBubble>
+                  )}
+
                 </div>
-              )}
+              ))}
+
+              <div ref={bottomRef} />
             </div>
 
-            {/* Input panel — only in input stage */}
-            {stage === "input" && (
-              <div className="bg-surface border-t border-border p-4">
-                <form onSubmit={handleSubmitTz} className="max-w-2xl mx-auto space-y-3">
-                  {/* Attachments row */}
-                  <div className="flex gap-2">
-                    <input
-                      className="flex-1 text-sm border border-border rounded-xl px-3.5 py-2 bg-surface-2 text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors"
-                      placeholder="🔗 URL референса (необязательно)"
-                      value={referenceUrl}
-                      onChange={(e) => setReferenceUrl(e.target.value)}
-                    />
-                    <label className="flex items-center gap-1.5 text-xs text-text-sub hover:text-text-main border border-border bg-surface-2 hover:bg-surface-3 rounded-xl px-3 py-2 cursor-pointer transition-colors">
-                      <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-                        <path d="M6.5 1.5V9M3 5.5L6.5 2L10 5.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                        <path d="M1.5 10.5H11.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-                      </svg>
-                      Файл
-                      <input type="file" accept="image/*" multiple className="hidden" onChange={handleFileChange} />
-                    </label>
-                    {attachments.length > 0 && (
-                      <span className="self-center text-xs text-text-muted bg-accent/10 text-accent px-2 py-1 rounded-lg">
-                        {attachments.length} прикреплено
-                      </span>
-                    )}
+            {/* ── Input ── */}
+            <div className={`border-t p-4 transition-colors ${pendingClarify ? "bg-accent/5 border-accent/20" : "bg-surface border-border"}`}>
+              <div className="max-w-2xl mx-auto">
+                {pendingClarify && (
+                  <div className="flex items-center gap-2 mb-2 text-xs text-accent font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse"/>
+                    Агент ждёт ваш ответ
                   </div>
+                )}
+                {/* Attachments row */}
+                {!pendingClarify && <div className="flex gap-2 mb-2">
+                  <input
+                    className="flex-1 text-sm border border-border rounded-xl px-3 py-2 bg-surface-2 text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors"
+                    placeholder="🔗 Референс URL"
+                    value={refUrl}
+                    onChange={e => setRefUrl(e.target.value)}
+                    disabled={!canType}
+                  />
+                  <label className={`flex items-center gap-1.5 text-xs border border-border rounded-xl px-3 py-2 cursor-pointer transition-colors ${canType ? "text-text-sub hover:text-text-main bg-surface-2 hover:bg-surface-3" : "text-text-muted opacity-50"}`}>
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="M6 1V8M3 4.5L6 1.5L9 4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M1 10H11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                    </svg>
+                    Файл
+                    <input type="file" accept="image/*" multiple className="hidden" onChange={handleFile} disabled={!canType}/>
+                  </label>
+                  {attachments.length > 0 && (
+                    <span className="self-center text-xs bg-accent/10 text-accent px-2 py-1 rounded-lg">
+                      {attachments.length} прикреплено
+                      <button onClick={() => setAttachments([])} className="ml-1 opacity-60 hover:opacity-100">×</button>
+                    </span>
+                  )}
+                </div>}
 
-                  {/* TZ textarea */}
-                  <div className="relative">
-                    <textarea
-                      className="w-full border border-border rounded-xl px-3.5 py-3 text-sm bg-surface-2 text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors resize-none h-32"
-                      placeholder="Опишите задачу или вставьте ТЗ целиком..."
-                      value={tz}
-                      onChange={(e) => setTz(e.target.value)}
-                    />
-                    <button
-                      type="submit"
-                      disabled={sending || !tz.trim()}
-                      className="absolute bottom-3 right-3 bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
-                    >
-                      {sending ? (
-                        <>
-                          <svg className="animate-spin" width="11" height="11" viewBox="0 0 11 11" fill="none">
-                            <circle cx="5.5" cy="5.5" r="4" stroke="currentColor" strokeWidth="1.3" strokeDasharray="14 10"/>
-                          </svg>
-                          Анализирую
-                        </>
-                      ) : (
-                        <>Отправить <span>↵</span></>
-                      )}
-                    </button>
-                  </div>
-                </form>
+                {/* Textarea */}
+                <div className="relative">
+                  <textarea
+                    ref={inputRef}
+                    className="w-full border border-border rounded-xl px-3.5 py-3 text-sm bg-surface-2 text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors resize-none"
+                    style={{ minHeight: 52, maxHeight: 180 }}
+                    placeholder={inputPlaceholder}
+                    value={input}
+                    onChange={e => setInput(e.target.value)}
+                    onKeyDown={onKeyDown}
+                    disabled={!canType}
+                    rows={2}
+                    onInput={e => {
+                      const t = e.target as HTMLTextAreaElement;
+                      t.style.height = "auto";
+                      t.style.height = Math.min(t.scrollHeight, 180) + "px";
+                    }}
+                  />
+                  <button
+                    onClick={() => handleSend()}
+                    disabled={!canType || !input.trim()}
+                    className="absolute bottom-2.5 right-2.5 bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
+                  >
+                    {busy ? (
+                      <svg className="animate-spin" width="11" height="11" viewBox="0 0 11 11" fill="none">
+                        <circle cx="5.5" cy="5.5" r="4" stroke="currentColor" strokeWidth="1.3" strokeDasharray="14 10"/>
+                      </svg>
+                    ) : (
+                      <>Отправить <kbd className="opacity-60 text-[10px]">⌘↵</kbd></>
+                    )}
+                  </button>
+                </div>
               </div>
-            )}
+            </div>
           </>
         )}
 
@@ -627,5 +645,114 @@ export default function SitePage() {
         )}
       </main>
     </div>
+  );
+}
+
+/* ─── Clarify message ─────────────────────────────────────────────────────── */
+function ClarifyMsg({ data, isLatest }: {
+  data: Clarification; isLatest: boolean;
+}) {
+  return (
+    <AgentBubble>
+      {data.summary && (
+        <p className="text-sm text-text-sub mb-3 pb-3 border-b border-border">{data.summary}</p>
+      )}
+      <p className="text-sm font-medium text-text-main mb-2">Уточните, пожалуйста:</p>
+      <ol className="space-y-1.5">
+        {data.questions.map((q, i) => (
+          <li key={i} className="flex gap-2 text-sm text-text-main">
+            <span className="text-accent font-semibold flex-shrink-0">{i + 1}.</span>
+            <span>{q}</span>
+          </li>
+        ))}
+      </ol>
+      {isLatest && (
+        <p className="mt-3 text-xs text-text-muted flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse"/>
+          Напишите ответ в поле ниже
+        </p>
+      )}
+    </AgentBubble>
+  );
+}
+
+/* ─── Estimate message ────────────────────────────────────────────────────── */
+function EstimateMsg({ msgIdx, est, subtasks, busy, isLatest, onToggle, onApprove }: {
+  msgIdx: number; est: TaskEstimate; subtasks: Subtask[];
+  busy: boolean; isLatest: boolean;
+  onToggle: (id: string) => void;
+  onApprove: () => void;
+}) {
+  const totalEnabled = subtasks.filter(s => s.enabled).reduce((a, s) => a + s.estimated_credits, 0);
+  const enabledCount = subtasks.filter(s => s.enabled).length;
+
+  return (
+    <AgentBubble>
+      <p className="text-sm text-text-main mb-3">
+        Нашёл <strong>{subtasks.length} задач{subtasks.length === 1 ? "у" : subtasks.length < 5 ? "и" : ""}</strong>.
+        Снимите галочки с ненужного и нажмите <strong>Запустить</strong>.
+      </p>
+      <div className="flex flex-wrap gap-1.5 mb-4">
+        <span className="text-xs bg-surface-2 border border-border text-text-sub px-2 py-1 rounded-lg">~{est.estimated_minutes} мин</span>
+        <span className="text-xs bg-surface-2 border border-border text-text-sub px-2 py-1 rounded-lg">{est.total_credits.toFixed(0)} кредитов</span>
+        <span className={`text-xs px-2 py-1 rounded-lg border ${
+          est.confidence === "high" ? "bg-emerald-50 border-emerald-100 text-emerald-700" :
+          est.confidence === "medium" ? "bg-amber-50 border-amber-100 text-amber-700" :
+          "bg-red-50 border-red-100 text-red-600"
+        }`}>
+          {est.confidence === "high" ? "✓ Высокая точность" : est.confidence === "medium" ? "~ Средняя" : "⚠ Низкая точность"}
+        </span>
+      </div>
+
+      {/* Subtask list */}
+      <div className="border border-border rounded-xl overflow-hidden mb-3">
+        {subtasks.map((st, i) => (
+          <label key={st.id} className={`flex items-start gap-3 px-3.5 py-3 cursor-pointer transition-colors border-b last:border-0 border-border ${st.enabled ? "bg-surface hover:bg-surface-2" : "bg-surface-2 opacity-60"}`}>
+            {isLatest && (
+              <input type="checkbox" checked={st.enabled} onChange={() => onToggle(st.id)} className="mt-0.5 accent-accent flex-shrink-0"/>
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-text-main">{st.title}</span>
+                <span className="text-xs text-text-muted flex-shrink-0">~{st.estimated_credits} кр.</span>
+              </div>
+              <p className="text-xs text-text-muted mt-0.5">{st.description}</p>
+              <div className="flex items-center gap-1.5 mt-1.5">
+                {st.files_to_touch[0] && (
+                  <span className="text-[10px] font-mono text-text-muted bg-surface-3 border border-border px-1.5 py-0.5 rounded truncate max-w-[200px]">
+                    {st.files_to_touch[0].split("/").pop()}
+                  </span>
+                )}
+                <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${RISK[st.risk]}`}>
+                  {st.risk === "low" ? "низкий" : st.risk === "medium" ? "средний" : "высокий"} риск
+                </span>
+              </div>
+            </div>
+          </label>
+        ))}
+      </div>
+
+      {isLatest && (
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-text-muted">
+            {enabledCount} из {subtasks.length} задач · {totalEnabled.toFixed(0)} кредитов
+          </span>
+          <button
+            onClick={onApprove}
+            disabled={busy || enabledCount === 0}
+            className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-sm font-medium px-5 py-2 rounded-xl transition-colors flex items-center gap-2"
+          >
+            {busy ? (
+              <>
+                <svg className="animate-spin" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 10"/>
+                </svg>
+                Запускаю...
+              </>
+            ) : "▶ Запустить"}
+          </button>
+        </div>
+      )}
+    </AgentBubble>
   );
 }

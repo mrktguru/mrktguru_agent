@@ -151,10 +151,14 @@ def seed_layers() -> None:
                 if row.max_tokens != d.max_tokens:
                     row.max_tokens = d.max_tokens
                     changed = True
-                # Sync prompt if DB prompt is a substring of new default
-                # (code added instructions at the end or in the middle).
-                # This preserves manually-written prompts that are longer/different.
-                if row.system_prompt != d.system_prompt and row.system_prompt in d.system_prompt:
+                # Sync prompt if:
+                # 1. DB prompt is a substring of new default (append-only change), OR
+                # 2. New default is >20% longer (substantial rewrite of code default).
+                # This preserves manually-written prompts while auto-applying code updates.
+                if row.system_prompt != d.system_prompt and (
+                    row.system_prompt in d.system_prompt
+                    or len(d.system_prompt) > len(row.system_prompt) * 1.2
+                ):
                     row.system_prompt = d.system_prompt
                     changed = True
         if changed:
