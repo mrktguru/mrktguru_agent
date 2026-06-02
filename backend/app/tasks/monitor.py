@@ -81,7 +81,9 @@ def monitor_all() -> dict:
 
 
 # Celery beat: run monitor_all every 5 minutes.
+# Merge (not overwrite) so the schedule is independent of task-module import order.
 celery_app.conf.beat_schedule = {
+    **(celery_app.conf.beat_schedule or {}),
     "monitor-every-5-min": {
         "task": "monitor.run_all",
         "schedule": crontab(minute="*/5"),
