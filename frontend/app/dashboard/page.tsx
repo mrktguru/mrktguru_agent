@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
@@ -29,9 +29,33 @@ const NAV_ITEMS = [
 export default function DashboardPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [user, setUser] = useState<User | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenuId(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   useEffect(() => { load(); }, []);
+
+  async function deleteSite(id: string) {
+    setDeletingId(id);
+    setOpenMenuId(null);
+    try {
+      await api.delete(`/api/sites/${id}`);
+      setSites((prev) => prev.filter((s) => s.id !== id));
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   async function load() {
     try {
@@ -187,46 +211,86 @@ export default function DashboardPage() {
               {sites.map((s) => {
                 const cmsKey = s.cms || "custom";
                 const cmsBadge = CMS_BADGE[cmsKey] || CMS_BADGE.custom;
+                const isMenuOpen = openMenuId === s.id;
                 return (
-                  <a
-                    key={s.id}
-                    href={`/site/${s.id}`}
-                    className="group bg-surface rounded-2xl border border-border hover:border-accent/25 hover:shadow-card-hover p-5 transition-all"
-                  >
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full ${s.status === "active" ? "bg-emerald-400" : s.status === "error" ? "bg-red-400" : "bg-amber-400"}`} />
-                        <span className="font-medium text-sm text-text-main">{s.name}</span>
+                  <div key={s.id} className="relative">
+                    <a
+                      href={`/site/${s.id}`}
+                      className="group bg-surface rounded-2xl border border-border hover:border-accent/25 hover:shadow-card-hover p-5 transition-all block"
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${s.status === "active" ? "bg-emerald-400" : s.status === "error" ? "bg-red-400" : "bg-amber-400"}`} />
+                          <span className="font-medium text-sm text-text-main">{s.name}</span>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setOpenMenuId(isMenuOpen ? null : s.id);
+                          }}
+                          className="text-text-muted hover:text-text-main transition-colors flex-shrink-0 p-0.5 rounded-lg hover:bg-surface-2"
+                          title="Настройки проекта"
+                        >
+                          {deletingId === s.id ? (
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="animate-spin">
+                              <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.3" strokeDasharray="8 8"/>
+                            </svg>
+                          ) : (
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                              <circle cx="7" cy="7" r="2" stroke="currentColor" strokeWidth="1.3"/>
+                              <path d="M7 1.5v1.2M7 11.3v1.2M1.5 7h1.2M11.3 7h1.2M3.1 3.1l.85.85M10.05 10.05l.85.85M10.9 3.1l-.85.85M3.95 10.05l-.85.85" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                            </svg>
+                          )}
+                        </button>
                       </div>
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-text-muted group-hover:text-accent transition-colors flex-shrink-0">
-                        <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
 
-                    {s.url && <p className="text-xs text-text-muted truncate mb-3">{s.url}</p>}
+                      {s.url && <p className="text-xs text-text-muted truncate mb-3">{s.url}</p>}
 
-                    <div className="flex flex-wrap gap-1.5">
-                      {s.cms && (
-                        <span className={`text-xs px-2 py-0.5 rounded-lg border font-medium ${cmsBadge}`}>
-                          {s.cms}{s.cms_version ? ` ${s.cms_version}` : ""}
-                        </span>
-                      )}
-                      {s.audit_score !== null && (
-                        <span className={`text-xs px-2 py-0.5 rounded-lg border ${
-                          s.audit_score >= 80 ? "bg-emerald-50 text-emerald-600 border-emerald-100" :
-                          s.audit_score >= 60 ? "bg-amber-50 text-amber-600 border-amber-100" :
-                          "bg-red-50 text-red-600 border-red-100"
-                        }`}>
-                          {s.audit_score}/100
-                        </span>
-                      )}
-                      {s.uptime_percent !== null && (
-                        <span className="text-xs px-2 py-0.5 rounded-lg border border-border bg-surface-2 text-text-sub">
-                          {s.uptime_percent.toFixed(1)}%
-                        </span>
-                      )}
-                    </div>
-                  </a>
+                      <div className="flex flex-wrap gap-1.5">
+                        {s.cms && (
+                          <span className={`text-xs px-2 py-0.5 rounded-lg border font-medium ${cmsBadge}`}>
+                            {s.cms}{s.cms_version ? ` ${s.cms_version}` : ""}
+                          </span>
+                        )}
+                        {s.audit_score !== null && (
+                          <span className={`text-xs px-2 py-0.5 rounded-lg border ${
+                            s.audit_score >= 80 ? "bg-emerald-50 text-emerald-600 border-emerald-100" :
+                            s.audit_score >= 60 ? "bg-amber-50 text-amber-600 border-amber-100" :
+                            "bg-red-50 text-red-600 border-red-100"
+                          }`}>
+                            {s.audit_score}/100
+                          </span>
+                        )}
+                        {s.uptime_percent !== null && (
+                          <span className="text-xs px-2 py-0.5 rounded-lg border border-border bg-surface-2 text-text-sub">
+                            {s.uptime_percent.toFixed(1)}%
+                          </span>
+                        )}
+                      </div>
+                    </a>
+
+                    {isMenuOpen && (
+                      <div
+                        ref={menuRef}
+                        className="absolute top-3 right-3 z-20 bg-surface border border-border rounded-xl shadow-lg py-1 min-w-[130px]"
+                      >
+                        <button
+                          onClick={() => {
+                            if (confirm(`Удалить проект «${s.name}»?`)) {
+                              deleteSite(s.id);
+                            }
+                          }}
+                          className="flex items-center gap-2 w-full px-3 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                            <path d="M1.5 3.5H11.5M5 3.5V2.5C5 2.22 5.22 2 5.5 2H7.5C7.78 2 8 2.22 8 2.5V3.5M10 3.5L9.5 10.5C9.5 10.78 9.28 11 9 11H4C3.72 11 3.5 10.78 3.5 10.5L3 3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                          Удалить
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
 
