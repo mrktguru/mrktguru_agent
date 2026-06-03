@@ -21,6 +21,7 @@ from app.services.claude.prompts import (
     PHASE_2_SYSTEM,
     PHASE_3_SYSTEM,
     PHASE_4_SYSTEM,
+    TASK_AUTO_FIX_SYSTEM,
 )
 
 
@@ -51,6 +52,11 @@ LAYER_DEFAULTS: dict[str, LayerDefault] = {
         name="Авто-фикс деплоя",
         description="Предлагает shell-команды для исправления упавшего шага деплоя.",
         product="deploy", model=_MODEL, system_prompt=AUTO_FIX_SYSTEM, max_tokens=1024,
+    ),
+    "task_auto_fix": LayerDefault(
+        name="Авто-фикс задач (самовосстановление)",
+        description="Анализирует ошибку выполнения подзадачи и предлагает исправление (правки или команды).",
+        product="sitedoc", model=_MODEL, system_prompt=TASK_AUTO_FIX_SYSTEM, max_tokens=2048,
     ),
     "code_gen": LayerDefault(
         name="Генерация кода",
