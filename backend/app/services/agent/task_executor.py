@@ -384,8 +384,11 @@ class TaskExecutor:
             return
 
         self._log(f"⚙ Пересобираю проект (npm run build в {root})...", "running", subtask_index)
+        # Use pipefail so the exit code reflects npm, not tail.
+        # Without it, `cmd | tail -40` always returns 0 even if cmd failed —
+        # which caused build errors to be silently reported as success.
         rc, out, err = self._ssh.run(
-            f"cd {root} && npm run build 2>&1 | tail -40",
+            f"bash -c 'set -o pipefail; cd {root} && npm run build 2>&1 | tail -40'",
             timeout=300,
         )
         if rc != 0:
