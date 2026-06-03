@@ -49,7 +49,7 @@ type MsgAnalyzing = { kind: "analyzing" };
 type MsgClarify = { kind: "clarify"; data: Clarification };
 type MsgEstimate = { kind: "estimate"; data: TaskEstimate; subtasks: Subtask[] };
 type MsgRunning = { kind: "running"; taskId: string; backupAvailable?: boolean; isRollback?: boolean };
-type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[]; backupAvailable?: boolean };
+type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[]; backupAvailable?: boolean; errorMessage?: string | null };
 type MsgError = { kind: "error"; text: string };
 
 type ChatMsg = MsgUser | MsgAnalyzing | MsgClarify | MsgEstimate | MsgRunning | MsgDone | MsgError;
@@ -88,10 +88,10 @@ function AgentBubble({ children, label }: { children: React.ReactNode; label?: s
 }
 
 /* ─── Log block (light) ───────────────────────────────────────────────────── */
-function LogBlock({ logs, running, siteId, taskId, lazy, autoExpand, onRollback, onNew, rolledBack }: {
+function LogBlock({ logs, running, siteId, taskId, lazy, autoExpand, onRollback, onNew, rolledBack, errorMessage }: {
   logs?: LogLine[]; running: boolean;
   siteId?: string; taskId?: string; lazy?: boolean; autoExpand?: boolean;
-  onRollback?: () => void; onNew?: () => void; rolledBack?: boolean;
+  onRollback?: () => void; onNew?: () => void; rolledBack?: boolean; errorMessage?: string | null;
 }) {
   const [collapsed, setCollapsed] = useState(!running && !autoExpand);
   const [fetched, setFetched] = useState<LogLine[] | null>(null);
@@ -167,6 +167,15 @@ function LogBlock({ logs, running, siteId, taskId, lazy, autoExpand, onRollback,
               </svg>
               <span>{loading ? "загружаю логи..." : "подключаюсь к серверу..."}</span>
             </div>
+          )}
+          {effectiveLogs.length === 0 && !running && !loading && errorMessage && (
+            <div className="flex items-start gap-2 text-red-600 leading-relaxed">
+              <span className="flex-shrink-0 select-none w-3 text-center">✗</span>
+              <span className="break-all">{errorMessage}</span>
+            </div>
+          )}
+          {effectiveLogs.length === 0 && !running && !loading && !errorMessage && (
+            <span className="text-slate-400 italic">логи не сохранились</span>
           )}
           {effectiveLogs.map((log, i) => (
             <div key={i} className={`flex items-start gap-2 leading-relaxed ${
@@ -318,7 +327,7 @@ export default function SitePage() {
           break;
         case "done":
         case "failed":
-          out.push({ kind: "done", status: t.status, taskId: t.id, logs: [], backupAvailable: t.backup_available });
+          out.push({ kind: "done", status: t.status, taskId: t.id, logs: [], backupAvailable: t.backup_available, errorMessage: t.error_message });
           break;
         case "rolled_back":
           out.push({ kind: "done", status: "rolled_back", taskId: t.id, logs: [], backupAvailable: false });
@@ -693,6 +702,7 @@ export default function SitePage() {
                         taskId={msg.taskId}
                         running={false}
                         rolledBack={msg.status === "rolled_back"}
+                        errorMessage={msg.errorMessage}
                         onRollback={msg.status === "done" && msg.backupAvailable ? () => handleRollback(msg.taskId) : undefined}
                         onNew={() => inputRef.current?.focus()}
                       />

@@ -21,7 +21,14 @@ export default function RegisterPage() {
       window.localStorage.setItem("token", data.access_token);
       router.push("/dashboard");
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? "Ошибка регистрации");
+      const detail = err?.response?.data?.detail;
+      setError(
+        Array.isArray(detail)
+          ? detail.map((e: any) => e.msg ?? String(e)).join("; ")
+          : typeof detail === "string"
+          ? detail
+          : "Ошибка регистрации"
+      );
     } finally {
       setLoading(false);
     }

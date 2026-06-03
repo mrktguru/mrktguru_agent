@@ -64,9 +64,8 @@ def run_execute(self, task_id: str) -> dict:
             db.add(log)
             db.commit()
 
-        ssh = _build_ssh_for_site(db, site)
-
         try:
+            ssh = _build_ssh_for_site(db, site)
             ssh.connect()
             executor = TaskExecutor(db, site, task, ssh, log_callback=_log)
             executor.execute()
@@ -76,7 +75,10 @@ def run_execute(self, task_id: str) -> dict:
             _log(f"Критическая ошибка: {exc}", "error")
             db.commit()
         finally:
-            ssh.close()
+            try:
+                ssh.close()
+            except Exception:
+                pass
 
         return {"task_id": task_id, "status": task.status}
 
@@ -106,8 +108,8 @@ def run_rollback(self, task_id: str) -> dict:
             ))
             db.commit()
 
-        ssh = _build_ssh_for_site(db, site)
         try:
+            ssh = _build_ssh_for_site(db, site)
             ssh.connect()
             _log("━━━ Откат изменений задачи ━━━", "running")
             _log("↩ Восстанавливаю файлы из бэкапа...", "running")
@@ -129,6 +131,9 @@ def run_rollback(self, task_id: str) -> dict:
             _log(f"⚠ Откат не удался: {exc}", "error")
             db.commit()
         finally:
-            ssh.close()
+            try:
+                ssh.close()
+            except Exception:
+                pass
 
         return {"task_id": task_id, "status": task.status}

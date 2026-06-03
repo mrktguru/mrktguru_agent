@@ -38,7 +38,13 @@ export default function LoginPage() {
       localStorage.setItem("token", data.access_token);
       await redirectAfterLogin();
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? "Неверный email или пароль");
+      const detail = err?.response?.data?.detail;
+      const msg = Array.isArray(detail)
+        ? detail.map((e: any) => e.msg ?? String(e)).join("; ")
+        : typeof detail === "string"
+        ? detail
+        : "Неверный email или пароль";
+      setError(msg);
       setLoading(false);
     }
   }
