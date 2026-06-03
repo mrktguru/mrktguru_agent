@@ -101,6 +101,17 @@ class TaskEstimator:
 
         scanner = SiteScanner(self._ssh)
 
+        # If site_root_path itself is a build artifact dir, resolve to source root
+        root = root.rstrip("/")
+        last_segment = root.split("/")[-1]
+        if last_segment in ("dist", "build", ".next", "out", "public"):
+            parent = root.rsplit("/", 1)[0]
+            # Prefer parent if it has package.json or src/
+            has_pkg = scanner._run(f"[ -f '{parent}/package.json' ] && echo yes || echo no")
+            has_src = scanner._run(f"[ -d '{parent}/src' ] || [ -d '{parent}/app' ] && echo yes || echo no")
+            if has_pkg == "yes" or has_src == "yes":
+                root = parent
+
         # 1. Fresh file tree
         structure = scanner._get_file_structure(root)
         all_entries = structure.get("entries", [])
