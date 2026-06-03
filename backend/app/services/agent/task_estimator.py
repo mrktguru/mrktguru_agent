@@ -60,6 +60,14 @@ class TaskEstimator:
             parts.append(f"Web-сервер: {site.web_server}")
         if site.site_root_path:
             parts.append(f"Корневая папка: {site.site_root_path}")
+        if site.framework:
+            parts.append(f"Фреймворк: {site.framework}")
+        if site.is_docker is not None:
+            parts.append(f"Docker: {'да' if site.is_docker else 'нет'}")
+        if site.docker_compose_dir:
+            parts.append(f"Docker Compose dir: {site.docker_compose_dir}")
+        if site.docker_service_name:
+            parts.append(f"Docker сервис: {site.docker_service_name}")
 
         # ── Live SSH context (if available) or fallback to DB snapshot ────────
         file_list: list[str] = []

@@ -704,8 +704,11 @@ export default function SitePage() {
         setBusy(false);
         ws.close();
         delete wsRef.current[taskId];
-        // Refresh allTasks so the restore-points sidebar reflects the new backup
-        loadHistory();
+        // Refresh only allTasks (for restore-points sidebar) — do NOT call loadHistory()
+        // because it resets the messages array and the user loses their current chat thread.
+        api.get<Task[]>(`/api/sites/${id}/tasks`)
+          .then(({ data }) => setAllTasks(data))
+          .catch(() => {});
       }
     };
     ws.onerror = () => {

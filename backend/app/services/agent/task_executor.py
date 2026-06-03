@@ -181,10 +181,26 @@ class TaskExecutor:
         return applied_files
 
     def _run_post_commands(self, idx: int, plan: dict) -> None:
-        """Run the plan's post_commands plus CMS-specific cache-flush commands."""
+        """Run the plan's post_commands plus CMS-specific cache-flush commands.
+
+        Plan-generated commands are required — failure raises RuntimeError and triggers
+        the self-healing loop (which can propose an alternative, e.g. npm build instead
+        of docker restart when Docker is not available).
+        CMS reload commands (wp cache flush etc.) are optional — only log on failure.
+        """
         post_cmds = plan.get("post_commands", [])
         cms_cmds = _SUPPORTED_CMS_RELOAD.get(self._site.cms or "", [])
-        for cmd in (post_cmds + cms_cmds):
+
+        for cmd in post_cmds:
+            self._log(f"  🔄 {cmd}", "running", idx)
+            rc, out, err = self._ssh.run(cmd, timeout=60)
+            if rc != 0:
+                output = (out or err or "").strip()
+                self._last_build_output = output[-2000:]
+                self._log(f"  ⚠ {output[:120]}", "running", idx)
+                raise RuntimeError(f"Команда завершилась с ошибкой: {output[-300:]}")
+
+        for cmd in cms_cmds:
             self._log(f"  🔄 {cmd}", "running", idx)
             rc, out, err = self._ssh.run(cmd, timeout=60)
             if rc != 0 and err:
