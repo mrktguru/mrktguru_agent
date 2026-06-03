@@ -29,12 +29,13 @@ router = APIRouter(prefix="/api/sites", tags=["sites"])
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
-def _serialize_site(s: Site) -> SitePublic:
+def _serialize_site(s: Site, server_ip: str | None = None) -> SitePublic:
     return SitePublic.model_validate({
         "id": str(s.id),
         "name": s.name,
         "url": s.url,
         "ssh_host": s.ssh_host,
+        "server_ip": server_ip or s.ssh_host,
         "ssh_port": s.ssh_port,
         "ssh_user": s.ssh_user,
         "auth_type": s.auth_type,
@@ -45,6 +46,14 @@ def _serialize_site(s: Site) -> SitePublic:
         "web_server": s.web_server,
         "server_os": s.server_os,
         "site_root_path": s.site_root_path,
+        "framework": s.framework,
+        "is_docker": bool(s.is_docker),
+        "docker_compose_dir": s.docker_compose_dir,
+        "docker_service_name": s.docker_service_name,
+        "docker_container_name": s.docker_container_name,
+        "needs_rebuild": bool(s.needs_rebuild),
+        "file_structure": s.file_structure,
+        "installed_plugins": s.installed_plugins,
         "audit_score": s.audit_score,
         "uptime_percent": s.uptime_percent,
         "created_at": s.created_at,
@@ -154,7 +163,12 @@ async def create_site(payload: SiteCreate, user: CurrentUser, db: DB) -> SitePub
 @router.get("/{site_id}", response_model=SitePublic)
 async def get_site(site_id: str, user: CurrentUser, db: DB) -> SitePublic:
     site = await _get_site_or_404(site_id, user.id, db)
-    return _serialize_site(site)
+    server_ip = site.ssh_host
+    if not server_ip and site.server_id:
+        server = await db.get(Server, site.server_id)
+        if server:
+            server_ip = server.ip
+    return _serialize_site(site, server_ip=server_ip)
 
 
 @router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)

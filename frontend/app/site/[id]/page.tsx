@@ -5,11 +5,19 @@ import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
+type FileStructure = { root?: string; entries?: string[] } | null;
+
 type Site = {
   id: string; name: string; url: string | null; status: string;
+  ssh_host?: string | null; server_ip?: string | null;
   cms: string | null; cms_version: string | null; web_server: string | null;
+  php_version?: string | null; server_os?: string | null;
+  site_root_path?: string | null;
   is_docker?: boolean; framework?: string;
+  file_structure?: FileStructure;
 };
+
+type FileDiff = { added: number; removed: number };
 
 type Subtask = {
   id: string; title: string; description: string;
@@ -35,6 +43,7 @@ type Task = {
   confidence: string | null;
   clarify_qa: { questions: string[]; answer: string | null }[] | null;
   changed_files: string[] | null; error_message: string | null;
+  file_diffs: Record<string, FileDiff> | null;
   backup_available: boolean; created_at: string;
 };
 
@@ -220,6 +229,158 @@ function LogBlock({ logs, running, siteId, taskId, lazy, autoExpand, onRollback,
   );
 }
 
+/* ─── File tree (built from the flat scan entry list) ─────────────────────── */
+type TreeNode = { name: string; path: string; children: Map<string, TreeNode>; isFile: boolean };
+
+function buildTree(structure: FileStructure): TreeNode | null {
+  if (!structure?.entries?.length) return null;
+  const root = (structure.root || "").replace(/\/+$/, "");
+  const tree: TreeNode = { name: root.split("/").pop() || "/", path: root, children: new Map(), isFile: false };
+  for (const entry of structure.entries) {
+    const rel = root && entry.startsWith(root) ? entry.slice(root.length) : entry;
+    const parts = rel.split("/").filter(Boolean);
+    let node = tree;
+    let acc = root;
+    parts.forEach((part, i) => {
+      acc += "/" + part;
+      const isFile = i === parts.length - 1 && /\.[a-z0-9]+$/i.test(part);
+      let child = node.children.get(part);
+      if (!child) {
+        child = { name: part, path: acc, children: new Map(), isFile };
+        node.children.set(part, child);
+      }
+      node = child;
+    });
+  }
+  return tree;
+}
+
+function FileTreeNode({ node, diffs, depth }: { node: TreeNode; diffs: Record<string, FileDiff>; depth: number }) {
+  const [open, setOpen] = useState(depth < 1);
+  const children = [...node.children.values()].sort((a, b) => {
+    if (a.isFile !== b.isFile) return a.isFile ? 1 : -1;  // folders first
+    return a.name.localeCompare(b.name);
+  });
+  const diff = diffs[node.path];
+
+  if (node.isFile) {
+    return (
+      <div className="flex items-center gap-1.5 py-0.5 text-xs" style={{ paddingLeft: depth * 12 + 4 }}>
+        <span className="text-text-muted">📄</span>
+        <span className="truncate text-text-sub">{node.name}</span>
+        {diff && (diff.added > 0 || diff.removed > 0) && (
+          <span className="ml-auto flex items-center gap-1 font-mono text-[10px]">
+            {diff.added > 0 && <span className="text-emerald-600">+{diff.added}</span>}
+            {diff.removed > 0 && <span className="text-red-500">−{diff.removed}</span>}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 py-0.5 text-xs w-full hover:bg-surface-2 rounded transition-colors"
+        style={{ paddingLeft: depth * 12 + 4 }}
+      >
+        <span className="text-text-muted">{open ? "▾" : "▸"}</span>
+        <span className="text-text-muted">📁</span>
+        <span className="truncate text-text-main font-medium">{node.name || "/"}</span>
+      </button>
+      {open && children.map((c) => <FileTreeNode key={c.path} node={c} diffs={diffs} depth={depth + 1} />)}
+    </div>
+  );
+}
+
+/* ─── Project info column ─────────────────────────────────────────────────── */
+function InfoRow({ label, value }: { label: string; value?: string | null }) {
+  if (!value) return null;
+  return (
+    <div className="flex items-baseline justify-between gap-2 py-1 text-xs">
+      <span className="text-text-muted flex-shrink-0">{label}</span>
+      <span className="text-text-main font-medium truncate text-right">{value}</span>
+    </div>
+  );
+}
+
+function ProjectInfo({ site, tasks, onRollback }: {
+  site: Site | null; tasks: Task[]; onRollback: (taskId: string) => void;
+}) {
+  if (!site) return null;
+
+  // Aggregate latest diff per file across all tasks (newest task wins).
+  const diffs: Record<string, FileDiff> = {};
+  for (const t of [...tasks].reverse()) {
+    if (t.file_diffs) for (const [path, d] of Object.entries(t.file_diffs)) diffs[path] = d;
+  }
+
+  const tree = buildTree(site.file_structure ?? null);
+  const restorePoints = tasks.filter((t) => t.backup_available);
+
+  return (
+    <aside className="w-72 bg-surface border-r border-border flex-shrink-0 overflow-y-auto">
+      {/* Server / stack */}
+      <div className="px-4 py-3 border-b border-border">
+        <h3 className="text-[11px] font-semibold text-text-muted uppercase tracking-wide mb-2">Сервер и стек</h3>
+        <InfoRow label="IP" value={site.server_ip || site.ssh_host} />
+        <InfoRow label="CMS" value={site.cms ? `${site.cms}${site.cms_version ? " " + site.cms_version : ""}` : null} />
+        <InfoRow label="Фреймворк" value={site.framework} />
+        <InfoRow label="Веб-сервер" value={site.web_server} />
+        <InfoRow label="PHP" value={site.php_version} />
+        <InfoRow label="ОС" value={site.server_os} />
+        {site.is_docker && <InfoRow label="Docker" value="да" />}
+        <InfoRow label="Путь" value={site.site_root_path} />
+      </div>
+
+      {/* File tree */}
+      <div className="px-4 py-3 border-b border-border">
+        <h3 className="text-[11px] font-semibold text-text-muted uppercase tracking-wide mb-2">Структура проекта</h3>
+        {tree ? (
+          <div className="-ml-1">
+            {[...tree.children.values()].length === 0
+              ? <FileTreeNode node={tree} diffs={diffs} depth={0} />
+              : [...tree.children.values()]
+                  .sort((a, b) => (a.isFile !== b.isFile ? (a.isFile ? 1 : -1) : a.name.localeCompare(b.name)))
+                  .map((c) => <FileTreeNode key={c.path} node={c} diffs={diffs} depth={0} />)}
+          </div>
+        ) : (
+          <p className="text-xs text-text-muted">Структура пока не просканирована.</p>
+        )}
+      </div>
+
+      {/* Backups / restore points */}
+      <div className="px-4 py-3">
+        <h3 className="text-[11px] font-semibold text-text-muted uppercase tracking-wide mb-2">Точки восстановления</h3>
+        {restorePoints.length === 0 ? (
+          <p className="text-xs text-text-muted">Пока нет бэкапов. Появятся после выполнения задач.</p>
+        ) : (
+          <div className="space-y-2">
+            {restorePoints.map((t) => (
+              <div key={t.id} className="border border-border rounded-xl px-3 py-2 bg-surface-2">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                  <span className="text-xs font-medium text-text-main truncate">{t.title || t.tz_text || "Задача"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-text-muted">{new Date(t.created_at).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                  <button
+                    onClick={() => onRollback(t.id)}
+                    className="text-[10px] text-text-sub border border-border px-2 py-0.5 rounded-lg hover:bg-surface-3 transition-colors"
+                  >
+                    ↩ Откатить
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 /* ─── Main page ───────────────────────────────────────────────────────────── */
 export default function SitePage() {
   const { id } = useParams<{ id: string }>();
@@ -230,6 +391,7 @@ export default function SitePage() {
   // Chat state
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [hiddenTasks, setHiddenTasks] = useState<Task[]>([]);  // older tasks not yet rendered
+  const [allTasks, setAllTasks] = useState<Task[]>([]);        // raw tasks for the info column
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [input, setInput] = useState("");
   const [refUrl, setRefUrl] = useState("");
@@ -265,6 +427,7 @@ export default function SitePage() {
   async function loadHistory() {
     try {
       const { data } = await api.get<Task[]>(`/api/sites/${id}/tasks`);
+      setAllTasks(data);  // newest-first, raw — used by the info column
       const chrono = [...data].reverse();  // backend returns newest-first
       const recent = chrono.slice(-INITIAL_TASKS);
       const older = chrono.slice(0, chrono.length - recent.length);
@@ -493,6 +656,8 @@ export default function SitePage() {
     if (!confirm("Откатить все изменения по этой задаче? Для Docker-сайтов будет выполнена пересборка.")) return;
     try {
       await api.post(`/api/sites/${id}/tasks/${taskId}/rollback`);
+      // Drop this restore point from the info column (backup is consumed)
+      setAllTasks(prev => prev.map(t => t.id === taskId ? { ...t, backup_available: false } : t));
       // Switch the done block into a live rollback stream
       setRunningLogs(p => ({ ...p, [taskId]: [] }));
       setMessages(prev => prev.map(m =>
@@ -582,6 +747,9 @@ export default function SitePage() {
         </nav>
       </aside>
 
+      {/* ── Project info column ── */}
+      <ProjectInfo site={site} tasks={allTasks} onRollback={handleRollback} />
+
       {/* ── Main ── */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {tab === "tasks" && (
@@ -601,17 +769,16 @@ export default function SitePage() {
                 </div>
               )}
 
-              {/* Empty state */}
+              {/* Empty state — agent welcome bubble */}
               {historyLoaded && messages.length === 0 && (
-                <div className="max-w-xl mx-auto text-center mt-20">
-                  <div className="w-14 h-14 rounded-3xl bg-accent/10 flex items-center justify-center mx-auto mb-5">
-                    <span className="text-3xl">✏️</span>
-                  </div>
-                  <h2 className="text-lg font-semibold text-text-main mb-2">Опишите задачу</h2>
-                  <p className="text-sm text-text-muted leading-relaxed">
-                    Напишите что нужно изменить на сайте.<br/>
-                    Можно вставить ТЗ целиком — агент разберётся.
-                  </p>
+                <div className="max-w-2xl mx-auto w-full">
+                  <AgentBubble label="SiteDoc AI">
+                    <p className="text-sm font-medium text-text-main mb-1">Привет! Проект подключён и просканирован 👋</p>
+                    <p className="text-sm text-text-muted leading-relaxed">
+                      Опишите задачу — что нужно изменить на сайте.<br/>
+                      Можно вставить ТЗ целиком, агент разберётся и при необходимости задаст уточняющие вопросы.
+                    </p>
+                  </AgentBubble>
                 </div>
               )}
 

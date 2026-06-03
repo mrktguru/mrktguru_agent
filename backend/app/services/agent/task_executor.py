@@ -44,6 +44,8 @@ class TaskExecutor:
         subtasks = self._task.subtasks or []
         enabled = [s for s in subtasks if s.get("enabled", True)]
         changed_files: list[str] = []
+        # Accumulated per-file line diffs: {path: {"added": int, "removed": int}}
+        self._file_diffs: dict[str, dict[str, int]] = {}
 
         for idx, subtask in enumerate(enabled):
             self._log(f"━━━ Задача {idx+1}/{len(enabled)}: {subtask['title']} ━━━", "running", idx)
@@ -64,6 +66,7 @@ class TaskExecutor:
 
         # Update task
         self._task.changed_files = list(set(changed_files))
+        self._task.file_diffs = self._file_diffs or None
         self._task.status = "done"
         # Backups are kept (not cleaned up) so the user can roll back manually.
         self._task.backup_available = self._backup.has_backups(str(self._task.id))
@@ -97,6 +100,7 @@ class TaskExecutor:
 
             self._log(f"  → {action}: {filepath}", "running", idx)
             self._apply_change(filepath, action, content, find)
+            self._record_diff(filepath, action, content, find)
             applied_files.append(filepath)
             self._log(f"  ✅ {filepath}", "success", idx)
 
@@ -287,6 +291,21 @@ class TaskExecutor:
             )
             if rc != 0:
                 raise RuntimeError(f"Create {filepath} failed: {stderr}")
+
+    def _record_diff(self, filepath: str, action: str, content: str, find: str) -> None:
+        """Accumulate a rough added/removed line count per file for the UI badge."""
+        diffs = getattr(self, "_file_diffs", None)
+        if diffs is None:
+            return
+        if action == "replace":
+            added = len(content.splitlines())
+            removed = len(find.splitlines())
+        else:  # append | create
+            added = len(content.splitlines())
+            removed = 0
+        entry = diffs.setdefault(filepath, {"added": 0, "removed": 0})
+        entry["added"] += added
+        entry["removed"] += removed
 
     def _default_log(self, message: str, status: str, subtask_index: int | None = None) -> None:
         log = TaskLog(

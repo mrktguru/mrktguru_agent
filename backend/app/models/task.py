@@ -42,6 +42,8 @@ class Task(UUIDMixin, TimestampMixin, Base):
 
     # Result
     changed_files: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Per-file line diff stats: {"<path>": {"added": int, "removed": int}}
+    file_diffs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     screenshot_before: Mapped[str | None] = mapped_column(Text, nullable=True)  # base64 or URL
     screenshot_after: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

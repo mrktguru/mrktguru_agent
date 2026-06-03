@@ -33,13 +33,12 @@ type Screen =
   | "name"
   | "server"
   | "discovery"
-  | "edit_task"
   | "new_git"
   | "new_describe"
   | "working";
 
 /* ─── Progress bar ───────────────────────────────────────────────────────── */
-const STEP_LABELS = ["Проект", "Сервер", "Выбор", "Задача"];
+const STEP_LABELS = ["Проект", "Сервер", "Выбор"];
 
 function screenToStep(s: Screen): number {
   switch (s) {
@@ -182,7 +181,6 @@ export default function NewProjectPage() {
 
   // Step 4 — fork
   const [selectedSite, setSelectedSite] = useState<DiscoveredSite | null>(null);
-  const [tzRaw, setTzRaw] = useState("");
   const [projectDesc, setProjectDesc] = useState("");
 
   const setS = (k: keyof typeof srv, v: string) => setSrv((f) => ({ ...f, [k]: v }));
@@ -257,52 +255,36 @@ export default function NewProjectPage() {
     }
   }
 
-  /* ── Fork A — edit existing site ── */
-  function pickSite(site: DiscoveredSite) {
+  /* ── Fork A — connect existing site (scan, then open chat) ── */
+  async function pickSite(site: DiscoveredSite) {
+    if (!selectedServerId) return;
     setSelectedSite(site);
-    setScreen("edit_task");
     setError("");
-  }
-
-  async function handleCreateSiteTask() {
-    if (!selectedServerId || !selectedSite) return;
     setScreen("working");
     setLoading(true);
-    setError("");
     setScanLog(["🔧 Подключаю проект..."]);
     try {
-      const { data: site } = await api.post<{ id: string }>("/api/sites", {
-        name: projectName || selectedSite.name,
-        url: selectedSite.url || undefined,
+      const { data: createdSite } = await api.post<{ id: string }>("/api/sites", {
+        name: projectName || site.name,
+        url: site.url || undefined,
         server_id: selectedServerId,
-        cms: selectedSite.cms || undefined,
-        framework: selectedSite.framework || undefined,
-        site_root_path: selectedSite.source_path || selectedSite.root_path || undefined,
-        is_docker: selectedSite.is_docker,
-        docker_compose_dir: selectedSite.docker_compose_dir || undefined,
-        docker_container_name: selectedSite.docker_container_name || undefined,
+        cms: site.cms || undefined,
+        framework: site.framework || undefined,
+        site_root_path: site.source_path || site.root_path || undefined,
+        is_docker: site.is_docker,
+        docker_compose_dir: site.docker_compose_dir || undefined,
+        docker_container_name: site.docker_container_name || undefined,
       });
       setScanLog((p) => [...p, "✓ Проект подключён", "🔍 Сканирую структуру файлов..."]);
       try {
-        await api.post(`/api/sites/${site.id}/scan`);
+        await api.post(`/api/sites/${createdSite.id}/scan`);
         setScanLog((p) => [...p, "✓ Структура изучена"]);
       } catch {
         setScanLog((p) => [...p, "⚠ Скан не удался, продолжаем без файловой структуры"]);
       }
-
-      if (tzRaw.trim()) {
-        setScanLog((p) => [...p, "🤖 Анализирую вашу задачу..."]);
-        try {
-          const { data: estimate } = await api.post<{ task_id: string }>(`/api/sites/${site.id}/tasks`, { tz_text: tzRaw });
-          localStorage.setItem(`pendingTask_${site.id}`, estimate.task_id);
-          setScanLog((p) => [...p, "✓ Задача проанализирована"]);
-        } catch {
-          setScanLog((p) => [...p, "⚠ Не удалось проанализировать задачу, откроем позже"]);
-        }
-      }
       setScanLog((p) => [...p, "✓ Открываю проект..."]);
       await new Promise((r) => setTimeout(r, 500));
-      router.push(`/site/${site.id}`);
+      router.push(`/site/${createdSite.id}`);
     } catch (err: any) {
       const msg = err?.response?.data?.detail || "Ошибка подключения";
       setError(msg);
@@ -608,45 +590,6 @@ export default function NewProjectPage() {
           </div>
         )}
 
-        {/* ── Fork A: edit existing — describe task ── */}
-        {screen === "edit_task" && selectedSite && (
-          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
-            <div className="mb-4">
-              <h2 className="text-xl font-semibold text-text-main mb-1">Что нужно сделать?</h2>
-              <p className="text-sm text-text-muted">
-                Проект: <span className="font-medium text-text-sub">{selectedSite.name}</span>
-              </p>
-            </div>
-
-            <textarea
-              className="w-full rounded-xl border border-border bg-surface-2 px-4 py-3 text-sm text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors resize-none h-36"
-              placeholder={"Например:\n«Исправить баннеры на главной — они отображаются неровно. Добавить слайдер на мобильной версии.»"}
-              value={tzRaw}
-              onChange={(e) => setTzRaw(e.target.value)}
-              autoFocus
-            />
-            <div className="flex items-center gap-2 mt-3 p-3 bg-accent/5 border border-accent/15 rounded-xl">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-accent flex-shrink-0">
-                <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M7 4V7.5M7 9.5V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-              <p className="text-xs text-accent/80">ИИ проанализирует проект с учётом вашей задачи и при необходимости задаст уточняющие вопросы</p>
-            </div>
-
-            <div className="flex justify-between mt-5">
-              <button onClick={() => setScreen("discovery")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
-                Назад
-              </button>
-              <button onClick={handleCreateSiteTask} className="bg-accent hover:bg-accent-hover text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2">
-                Подключить и проанализировать
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* ── Fork B step 1: Git repository (optional) ── */}
         {screen === "new_git" && (
           <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
@@ -724,7 +667,7 @@ export default function NewProjectPage() {
             <LogTerminal lines={scanLog} loading={loading} />
             {error && (
               <div className="mt-4 flex gap-2">
-                <button onClick={() => setScreen(selectedSite ? "edit_task" : "new_describe")} className="flex-1 border border-border rounded-xl py-2.5 text-sm text-text-sub hover:bg-surface-2 transition-colors">
+                <button onClick={() => setScreen(selectedSite ? "discovery" : "new_describe")} className="flex-1 border border-border rounded-xl py-2.5 text-sm text-text-sub hover:bg-surface-2 transition-colors">
                   Назад
                 </button>
               </div>

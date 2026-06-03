@@ -33,7 +33,8 @@ class SitePublic(BaseModel):
     id: str
     name: str
     url: str | None
-    ssh_host: str
+    ssh_host: str | None
+    server_ip: str | None = None  # resolved from ssh_host or linked server
     ssh_port: int
     ssh_user: str
     auth_type: str
@@ -44,6 +45,14 @@ class SitePublic(BaseModel):
     web_server: str | None
     server_os: str | None
     site_root_path: str | None
+    framework: str | None = None
+    is_docker: bool = False
+    docker_compose_dir: str | None = None
+    docker_service_name: str | None = None
+    docker_container_name: str | None = None
+    needs_rebuild: bool = False
+    file_structure: dict | None = None
+    installed_plugins: dict | None = None
     audit_score: int | None
     uptime_percent: float | None
     created_at: datetime
@@ -116,6 +125,7 @@ class TaskPublic(BaseModel):
     confidence: str | None
     clarify_qa: list[dict] | None  # [{questions: [...], answer: str|None}] — for thread rebuild
     changed_files: list[str] | None
+    file_diffs: dict | None  # {"<path>": {"added": int, "removed": int}}
     screenshot_before: str | None
     screenshot_after: str | None
     error_message: str | None
@@ -139,6 +149,7 @@ class TaskPublic(BaseModel):
             confidence=t.confidence,
             clarify_qa=t.clarify_qa,
             changed_files=t.changed_files,
+            file_diffs=getattr(t, "file_diffs", None),
             screenshot_before=t.screenshot_before,
             screenshot_after=t.screenshot_after,
             error_message=t.error_message,
