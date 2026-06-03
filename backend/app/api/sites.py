@@ -257,15 +257,30 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
     await db.commit()
     await db.refresh(task)
 
+    # Try to build a live SSH connection so the estimator can read real files.
+    # If SSH is unavailable we fall back gracefully to DB-stored file_structure.
+    ssh_client = None
+    try:
+        ssh_client = await _build_ssh(site, db)
+        ssh_client.connect()
+    except Exception:
+        ssh_client = None  # silently degrade — estimation still works via DB
+
     # Run estimation
     try:
-        estimator = TaskEstimator(site, task)
+        estimator = TaskEstimator(site, task, ssh=ssh_client)
         estimate = await estimator.estimate()
     except Exception as exc:
         task.status = "failed"
         task.error_message = str(exc)
         await db.commit()
         raise HTTPException(status_code=500, detail=f"Estimation failed: {exc}") from exc
+    finally:
+        if ssh_client:
+            try:
+                ssh_client.close()
+            except Exception:
+                pass
 
     # Agent needs clarification before it can plan work
     if estimate.get("status") == "needs_clarification":

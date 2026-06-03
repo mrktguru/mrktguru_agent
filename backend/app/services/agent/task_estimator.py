@@ -3,18 +3,21 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
+import shlex
 
 from app.models.site import Site
 from app.models.task import Task
 from app.services.claude.client import ClaudeClient
 from app.services.llm.registry import resolve
 
+_SKIP_DIRS = ("/dist/", "/build/", "/.next/", "/out/", "/node_modules/", "__pycache__")
+
 
 class TaskEstimator:
-    def __init__(self, site: Site, task: Task) -> None:
+    def __init__(self, site: Site, task: Task, ssh=None) -> None:
         self._site = site
         self._task = task
+        self._ssh = ssh  # SSHClient | None  — live SSH for fresh file reads
 
     async def estimate(self) -> dict:
         site_context = self._build_site_context()
@@ -50,21 +53,122 @@ class TaskEstimator:
             parts.append(f"Web-сервер: {site.web_server}")
         if site.site_root_path:
             parts.append(f"Корневая папка: {site.site_root_path}")
-        if site.file_structure:
-            entries = site.file_structure.get("entries", [])
-            if entries:
-                # Exclude compiled output — show only source files so the LLM
-                # never puts dist/build/.next paths into files_to_touch.
-                _SKIP = ("/dist/", "/build/", "/.next/", "/out/", "/node_modules/", "__pycache__")
-                source_entries = [e for e in entries if not any(s in e for s in _SKIP)]
-                # Always prefer source entries; fall back to full list if scan only found dist
-                shown = source_entries if source_entries else entries
-                parts.append("Структура файлов (только исходники):\n" + "\n".join(shown[:120]))
+
+        # ── Live SSH context (if available) or fallback to DB snapshot ────────
+        file_list: list[str] = []
+        file_contents: dict[str, str] = {}
+
+        if self._ssh and site.site_root_path:
+            try:
+                file_list, file_contents = self._fetch_live_context(
+                    site.site_root_path, self._task.tz_text or ""
+                )
+            except Exception:
+                pass  # fall through to DB fallback
+
+        if not file_list:
+            # Fallback: DB snapshot, filtered to source files only
+            db_entries = (site.file_structure or {}).get("entries", [])
+            file_list = [e for e in db_entries if not any(s in e for s in _SKIP_DIRS)]
+            if not file_list:
+                file_list = db_entries  # last resort: show everything
+
+        if file_list:
+            parts.append("Структура файлов (только исходники):\n" + "\n".join(file_list[:150]))
+
+        # Include actual file contents so Claude sees real code
+        for path, content in file_contents.items():
+            parts.append(f"\n--- {path} ---\n{content}")
+
         if site.installed_plugins:
             active = site.installed_plugins.get("active", [])
             if active:
                 parts.append("Активные плагины: " + ", ".join(active[:20]))
+
         return "\n".join(parts)
+
+    def _fetch_live_context(
+        self, root: str, tz_text: str
+    ) -> tuple[list[str], dict[str, str]]:
+        """Return (source_file_list, {path: content}) via live SSH.
+
+        Steps:
+          1. Fresh `find` → source-only file list (no dist/build)
+          2. grep source files for terms extracted from tz_text
+          3. Read up to 10 matched files (cat | head -400)
+        """
+        from app.services.ssh.scanner import SiteScanner
+
+        scanner = SiteScanner(self._ssh)
+
+        # 1. Fresh file tree
+        structure = scanner._get_file_structure(root)
+        all_entries = structure.get("entries", [])
+        source_entries = [e for e in all_entries if not any(s in e for s in _SKIP_DIRS)]
+
+        # 2. Build grep pattern from tz_text
+        grep_terms = self._extract_grep_terms(tz_text)
+        files_to_read: list[str] = []
+
+        if grep_terms and source_entries:
+            pattern = "|".join(grep_terms)
+            # grep recursively from root, limit to source extensions
+            _, out, _ = self._ssh.run(
+                f"grep -rl {shlex.quote(pattern)} {shlex.quote(root)} "
+                f"--include='*.css' --include='*.scss' --include='*.tsx' "
+                f"--include='*.ts' --include='*.vue' --include='*.html' "
+                f"--include='*.js' --include='*.php' "
+                f"2>/dev/null | grep -v '/dist/' | grep -v '/build/' "
+                f"| grep -v '/node_modules/' | grep -v '/.next/' | head -12",
+                timeout=20,
+            )
+            files_to_read = [f.strip() for f in out.splitlines() if f.strip()]
+
+        # Fallback: use all CSS/SCSS source files when grep finds nothing
+        if not files_to_read:
+            files_to_read = [
+                e for e in source_entries
+                if e.endswith((".css", ".scss")) and not any(s in e for s in _SKIP_DIRS)
+            ][:8]
+
+        # 3. Read file contents (up to 10 files, 400 lines each)
+        file_contents: dict[str, str] = {}
+        for path in files_to_read[:10]:
+            _, content, _ = self._ssh.run(
+                f"cat {shlex.quote(path)} 2>/dev/null | head -400", timeout=15
+            )
+            if content.strip():
+                file_contents[path] = content
+
+        return source_entries, file_contents
+
+    def _extract_grep_terms(self, tz_text: str) -> list[str]:
+        """Extract 3-5 grep search terms from the task description."""
+        text = tz_text.lower()
+        terms: list[str] = []
+
+        # Map common Russian task keywords → CSS/code patterns to search for
+        keyword_map = [
+            (["фон", "background", "bg-"], "background"),
+            (["ссылк", "link", "href"], "a[^,{]*{|a:hover|a:link"),
+            (["кнопк", "btn", "button"], "btn|button"),
+            (["цвет", "color", "краск"], "color"),
+            (["отступ", "padding", "margin"], "padding|margin"),
+            (["шрифт", "font", "текст"], "font"),
+            (["тень", "shadow"], "shadow"),
+            (["границ", "border"], "border"),
+            (["навигац", "меню", "nav"], "nav"),
+            (["иконк", "icon", "svg"], "icon|svg"),
+        ]
+        for keywords, pattern in keyword_map:
+            if any(kw in text for kw in keywords):
+                terms.append(pattern)
+
+        # Also grab short words that look like CSS class names (.something)
+        class_refs = re.findall(r"\.[a-z][\w-]{2,}", tz_text)
+        terms.extend(class_refs[:3])
+
+        return terms[:5] if terms else ["background", "color", "a[^,{]*{"]
 
     def _build_user_message(self) -> str:
         lines = [f"ТЗ:\n{self._task.tz_text}"]
