@@ -273,7 +273,7 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
         sa_select(Task)
         .where(Task.site_id == uuid.UUID(site_id), Task.id != task.id,
                Task.status.in_(["done", "failed", "rolled_back"]))
-        .order_by(Task.updated_at.desc())
+        .order_by(Task.created_at.desc())
         .limit(5)
     )).all()))
 

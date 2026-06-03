@@ -130,8 +130,8 @@ class TaskEstimator:
             st = status_ru.get(t.status, t.status)
             title = (t.title or (t.tz_text or ""))[:70]
             ts = ""
-            if getattr(t, "updated_at", None):
-                ts = t.updated_at.strftime("%d %b %H:%M")
+            if getattr(t, "created_at", None):
+                ts = t.created_at.strftime("%d %b %H:%M")
             lines.append(f"\n[{i}] «{title}» — {st} {ts}".rstrip())
             if t.changed_files:
                 lines.append(f"    Изменены файлы: {', '.join(t.changed_files[:6])}")
