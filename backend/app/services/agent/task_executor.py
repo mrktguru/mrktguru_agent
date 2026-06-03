@@ -211,9 +211,13 @@ class TaskExecutor:
         self._verify_up(subtask_index, verify_url)
 
     # Markers that reliably indicate a broken page (checked case-insensitively).
+    # PHP renders errors both as plaintext ("Fatal error:") and HTML
+    # ("Fatal error</b>:"), so match both forms.
     _BREAKAGE_MARKERS = (
         "502 bad gateway", "503 service", "504 gateway",
-        "internal server error", "fatal error:", "parse error:",
+        "internal server error",
+        "fatal error:", "fatal error</b>",
+        "parse error:", "parse error</b>",
         "traceback (most recent call last)",
         "application error: a client-side exception",
         "error: cannot find module",
