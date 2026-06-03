@@ -76,6 +76,16 @@ class TaskEstimator:
         if file_list:
             parts.append("Структура файлов (только исходники):\n" + "\n".join(file_list[:150]))
 
+        # ── Design system: always fetch for frontend frameworks ───────────────
+        frontend_frameworks = {"nextjs", "react", "vue", "nuxt", "vite", "angular"}
+        if self._ssh and site.site_root_path and (site.cms or "") in frontend_frameworks:
+            try:
+                design_ctx = self._extract_design_system(site.site_root_path)
+                if design_ctx:
+                    parts.insert(1, design_ctx)  # right after КОНТЕКСТ САЙТА header
+            except Exception:
+                pass
+
         # Include actual file contents so Claude sees real code
         for path, content in file_contents.items():
             parts.append(f"\n--- {path} ---\n{content}")
@@ -86,6 +96,62 @@ class TaskEstimator:
                 parts.append("Активные плагины: " + ", ".join(active[:20]))
 
         return "\n".join(parts)
+
+    # ── Design-system files: always read for frontend projects ────────────────
+    _DESIGN_SYSTEM_FILES = [
+        "tailwind.config.js", "tailwind.config.ts",
+        "src/index.css", "src/styles/global.css", "src/styles/globals.css",
+        "app/globals.css", "src/styles/variables.css", "src/tokens.css", "src/theme.ts",
+    ]
+    _COMPONENT_DIRS = [
+        "src/components/ui", "src/components/shared", "components/ui", "src/ui",
+    ]
+    # Within component dirs these names get priority so Claude sees core patterns first
+    _COMPONENT_PRIORITY = ("button", "card", "badge", "input", "modal")
+
+    def _extract_design_system(self, root: str) -> str:
+        """Read tailwind config, global CSS and shared UI components.
+
+        Returns a formatted string to prepend to the site context so the estimator
+        (and via the same helper, the executor) knows the real design tokens and
+        existing component patterns before planning any changes.
+        """
+        parts: list[str] = ["ДИЗАЙН-СИСТЕМА:"]
+
+        # 1. Config + global CSS files
+        for rel in self._DESIGN_SYSTEM_FILES:
+            path = f"{root}/{rel}"
+            rc, content, _ = self._ssh.run(f"cat {path!r} 2>/dev/null | head -200", timeout=15)
+            if rc == 0 and content.strip():
+                parts.append(f"--- {path} ---\n{content.strip()}")
+
+        # 2. Shared UI components (Button, Card, … — highest priority first)
+        for comp_dir_rel in self._COMPONENT_DIRS:
+            comp_dir = f"{root}/{comp_dir_rel}"
+            rc, listing, _ = self._ssh.run(
+                f"ls {comp_dir!r} 2>/dev/null | head -30", timeout=10
+            )
+            if rc != 0 or not listing.strip():
+                continue
+            files = [f.strip() for f in listing.splitlines() if f.strip()]
+            # Sort: priority names first, then alphabetical
+            def _prio(name: str) -> int:
+                n = name.lower()
+                for i, p in enumerate(self._COMPONENT_PRIORITY):
+                    if n.startswith(p):
+                        return i
+                return len(self._COMPONENT_PRIORITY)
+            files.sort(key=_prio)
+            for fname in files[:5]:
+                path = f"{comp_dir}/{fname}"
+                rc, content, _ = self._ssh.run(
+                    f"cat {path!r} 2>/dev/null | head -150", timeout=15
+                )
+                if rc == 0 and content.strip():
+                    parts.append(f"--- {path} ---\n{content.strip()}")
+            break  # first existing component dir is enough
+
+        return "\n".join(parts) if len(parts) > 1 else ""
 
     def _fetch_live_context(
         self, root: str, tz_text: str

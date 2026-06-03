@@ -203,6 +203,20 @@ ESTIMATOR_SYSTEM = dedent("""\
     - CSS в Vite/React: /путь/src/index.css или /путь/src/styles/*.css
     - CSS в Next.js: /путь/app/globals.css или /путь/src/styles/globals.css
 
+    ДЛЯ FRONTEND ЗАДАЧ (если в контексте есть ДИЗАЙН-СИСТЕМА):
+    Перед разбивкой изучи tailwind.config, globals.css и примеры компонентов из контекста.
+    - Используй ТОЛЬКО токены из конфига: bg-accent, text-text-sub, shadow-card — НЕ хардкоди цвета
+    - Смотри как сделаны существующие кнопки/карточки и делай новое по тому же образцу
+    - В description подзадачи указывай КОНКРЕТНЫЕ Tailwind-классы которые нужно добавить/изменить
+
+    ПРИНЦИПЫ КРАСИВОГО UI — применяй при задачах "сделать красивее", "улучшить дизайн":
+    - Иерархия: заголовки крупнее, кнопки действий выделены цветом accent
+    - Пространство: секции разделены отступами (py-6, gap-4), не "слипаются"
+    - Консистентность: одинаковые rounded, одинаковые тени, одинаковые hover-эффекты
+    - Hover/transitions: все кликабельные элементы — transition-colors, cursor-pointer
+    - Ссылки: без background по умолчанию, используй text-accent hover:underline
+    - Разбивай "сделать красиво" на атомарные подзадачи: отдельно кнопки, карточки, spacing, hover-states
+
     Детализация подзадач:
     - Каждая подзадача = одно атомарное изменение в одном файле или блоке
     - Разбивай максимально подробно: отдельная подзадача на каждый тип кнопок, каждую страницу, каждый CSS-блок
@@ -282,6 +296,31 @@ EXECUTOR_SYSTEM = dedent("""\
     - Для Next.js CSS: ищи tailwind классы в TSX-файлах или globals.css / tailwind.config
     - Для изменения цвета кнопок в Tailwind: найди className с bg-* и замени цвет
     - post_commands для Docker-сайтов: оставь пустым — rebuild делается автоматически
+
+    TAILWIND / ДИЗАЙН-СИСТЕМА (если в контексте есть tailwind.config или globals.css):
+    Перед правкой изучи дизайн-токены из контекста и используй ИХ — не выдумывай цвета.
+    ЗАПРЕЩЕНО:
+    - style={{color: '#6366f1'}} или любые inline-стили — только className в Tailwind
+    - bg-indigo-500 если в конфиге есть кастомный bg-accent
+    - text-gray-500 если есть text-text-sub — всегда используй семантические токены
+    - Добавлять background к a{}, a:hover{} — ссылки без фона по умолчанию
+    - Писать новый CSS в .css файл если можно сделать Tailwind-классом в TSX
+
+    КАК ДЕЛАТЬ КРАСИВЫЕ КНОПКИ (Tailwind паттерны):
+    - Основная (CTA):   className="bg-accent text-white px-4 py-2 rounded-xl hover:bg-accent-hover transition-colors font-medium text-sm"
+    - Вторичная:        className="bg-surface-3 text-text-main px-4 py-2 rounded-xl hover:bg-border transition-colors text-sm"
+    - Опасная:          className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 transition-colors text-sm"
+    - Иконка-кнопка:    className="p-2 rounded-lg text-text-sub hover:bg-surface-3 hover:text-text-main transition-colors"
+    - Ссылка без фона:  className="text-accent hover:underline" (НЕ добавляй bg-*)
+
+    КАК ДЕЛАТЬ КРАСИВЫЕ КАРТОЧКИ:
+    - Обёртка:          className="bg-surface rounded-2xl shadow-card p-6 border border-border"
+    - Заголовок:        className="text-sm font-medium text-text-sub uppercase tracking-wide mb-4"
+    - Значение/число:   className="text-2xl font-semibold text-text-main"
+    - Подпись:          className="text-sm text-text-muted"
+
+    Если в контексте видишь существующие компоненты (Button.tsx, Card.tsx и т.д.) —
+    изучи их паттерны и делай новые изменения в том же стиле.
 
     Формат ответа:
     {

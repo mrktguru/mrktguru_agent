@@ -86,9 +86,10 @@ class TaskExecutor:
         if backup_path:
             self._log(f"✅ Бэкап: {backup_path}", "success", idx)
 
-        # Step 2: Read files
+        # Step 2: Read files (design system first so Claude gets full context)
         self._log("📂 Читаю файлы...", "running", idx)
-        file_contents = self._read_files(files_to_touch)
+        design_files = self._design_system_files()
+        file_contents = self._read_files(design_files + files_to_touch)
 
         # Step 3: Ask Claude for change plan
         self._log("🤖 Анализирую задачу...", "running", idx)
@@ -344,6 +345,25 @@ class TaskExecutor:
             self._log(f"⚠ Сборка завершилась с ошибкой: {self._last_build_output[-200:]}", "running", subtask_index)
             raise RuntimeError(f"npm run build failed: {self._last_build_output[-300:]}")
         self._log(f"✅ Пересборка завершена", "success", subtask_index)
+
+    _DESIGN_SYSTEM_RELS = [
+        "tailwind.config.js", "tailwind.config.ts",
+        "src/index.css", "src/styles/global.css", "src/styles/globals.css",
+        "app/globals.css", "src/styles/variables.css", "src/tokens.css", "src/theme.ts",
+    ]
+
+    def _design_system_files(self) -> list[str]:
+        """Return absolute paths to design-system files that exist on the server."""
+        root = (self._site.site_root_path or "").rstrip("/")
+        if not root:
+            return []
+        existing: list[str] = []
+        for rel in self._DESIGN_SYSTEM_RELS:
+            path = f"{root}/{rel}"
+            rc, out, _ = self._ssh.run(f"[ -f {path!r} ] && echo yes || echo no", timeout=8)
+            if out.strip() == "yes":
+                existing.append(path)
+        return existing
 
     def _read_files(self, files: list[str]) -> dict[str, str]:
         contents = {}
