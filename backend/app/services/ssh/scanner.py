@@ -559,15 +559,13 @@ class SiteScanner:
         if not root:
             return {}
         out = self._run(
-            f"find '{root}' -maxdepth 4 "
-            f"\\( -name '*.php' -o -name '*.tsx' -o -name '*.ts' -o -name '*.vue' "
-            f"-o -name '*.js' -o -name '*.css' -o -name '*.scss' -o -type d \\) "
-            f"-not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' "
-            f"-not -path '*/build/*' -not -path '*/.next/*' "
-            f"2>/dev/null | head -300"
+            f"find '{root}' -maxdepth 6 "
+            f"-not -path '*/node_modules/*' -not -path '*/.git/*' "
+            f"-not -path '*/__pycache__/*' -not -name '*.pyc' "
+            f"2>/dev/null | sort | head -600"
         )
         files = [line for line in out.splitlines() if line.strip()]
-        return {"root": root, "entries": files[:200]}
+        return {"root": root, "entries": files[:500]}
 
     # ── Plugins ───────────────────────────────────────────────────────────────
 

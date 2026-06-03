@@ -256,20 +256,20 @@ function buildTree(structure: FileStructure): TreeNode | null {
 }
 
 function FileTreeNode({ node, diffs, depth }: { node: TreeNode; diffs: Record<string, FileDiff>; depth: number }) {
-  const [open, setOpen] = useState(depth < 1);
-  const children = [...node.children.values()].sort((a, b) => {
-    if (a.isFile !== b.isFile) return a.isFile ? 1 : -1;  // folders first
-    return a.name.localeCompare(b.name);
-  });
+  const [open, setOpen] = useState(depth === 0);
   const diff = diffs[node.path];
 
   if (node.isFile) {
     return (
-      <div className="flex items-center gap-1.5 py-0.5 text-xs" style={{ paddingLeft: depth * 12 + 4 }}>
-        <span className="text-text-muted">📄</span>
-        <span className="truncate text-text-sub">{node.name}</span>
+      <div className="flex items-center gap-1 py-[2px] text-xs group" style={{ paddingLeft: depth * 14 + 2 }}>
+        {/* file icon */}
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0 text-slate-400">
+          <path d="M2 1h5.5L10 3.5V11H2V1z" stroke="currentColor" strokeWidth="1" fill="none"/>
+          <path d="M7 1v3h3" stroke="currentColor" strokeWidth="1"/>
+        </svg>
+        <span className="truncate text-text-sub flex-1 min-w-0">{node.name}</span>
         {diff && (diff.added > 0 || diff.removed > 0) && (
-          <span className="ml-auto flex items-center gap-1 font-mono text-[10px]">
+          <span className="flex-shrink-0 flex items-center gap-0.5 font-mono text-[10px]">
             {diff.added > 0 && <span className="text-emerald-600">+{diff.added}</span>}
             {diff.removed > 0 && <span className="text-red-500">−{diff.removed}</span>}
           </span>
@@ -278,18 +278,36 @@ function FileTreeNode({ node, diffs, depth }: { node: TreeNode; diffs: Record<st
     );
   }
 
+  const children = [...node.children.values()].sort((a, b) => {
+    if (a.isFile !== b.isFile) return a.isFile ? 1 : -1;  // folders first
+    return a.name.localeCompare(b.name);
+  });
+
   return (
     <div>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 py-0.5 text-xs w-full hover:bg-surface-2 rounded transition-colors"
-        style={{ paddingLeft: depth * 12 + 4 }}
+        className="flex items-center gap-1 py-[2px] text-xs w-full hover:bg-surface-2 rounded-md transition-colors"
+        style={{ paddingLeft: depth * 14 + 2 }}
       >
-        <span className="text-text-muted">{open ? "▾" : "▸"}</span>
-        <span className="text-text-muted">📁</span>
-        <span className="truncate text-text-main font-medium">{node.name || "/"}</span>
+        {/* chevron */}
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 text-slate-400 transition-transform" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}>
+          <path d="M3 2L7 5L3 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+        {/* folder icon */}
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0 text-amber-400">
+          <path d="M1 3.5C1 2.67 1.67 2 2.5 2H4.5L5.5 3H9.5C10.33 3 11 3.67 11 4.5V8.5C11 9.33 10.33 10 9.5 10H2.5C1.67 10 1 9.33 1 8.5V3.5Z" fill="currentColor" fillOpacity="0.3" stroke="currentColor" strokeWidth="0.8"/>
+        </svg>
+        <span className="truncate text-text-main font-medium flex-1 min-w-0 text-left">{node.name || "/"}</span>
+        {children.length > 0 && (
+          <span className="flex-shrink-0 text-[10px] text-text-muted mr-1">{children.length}</span>
+        )}
       </button>
-      {open && children.map((c) => <FileTreeNode key={c.path} node={c} diffs={diffs} depth={depth + 1} />)}
+      {open && (
+        <div>
+          {children.map((c) => <FileTreeNode key={c.path} node={c} diffs={diffs} depth={depth + 1} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -305,8 +323,9 @@ function InfoRow({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
-function ProjectInfo({ site, tasks, onRollback }: {
+function ProjectInfo({ site, tasks, onRollback, onRescan, rescanning }: {
   site: Site | null; tasks: Task[]; onRollback: (taskId: string) => void;
+  onRescan: () => void; rescanning: boolean;
 }) {
   if (!site) return null;
 
@@ -336,9 +355,19 @@ function ProjectInfo({ site, tasks, onRollback }: {
 
       {/* File tree */}
       <div className="px-4 py-3 border-b border-border">
-        <h3 className="text-[11px] font-semibold text-text-muted uppercase tracking-wide mb-2">Структура проекта</h3>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-[11px] font-semibold text-text-muted uppercase tracking-wide">Структура проекта</h3>
+          <button
+            onClick={onRescan}
+            disabled={rescanning}
+            className="text-[10px] text-text-muted hover:text-accent transition-colors disabled:opacity-40"
+            title="Пересканировать"
+          >
+            {rescanning ? "…" : "↻"}
+          </button>
+        </div>
         {tree ? (
-          <div className="-ml-1">
+          <div>
             {[...tree.children.values()].length === 0
               ? <FileTreeNode node={tree} diffs={diffs} depth={0} />
               : [...tree.children.values()]
@@ -393,6 +422,7 @@ export default function SitePage() {
   const [hiddenTasks, setHiddenTasks] = useState<Task[]>([]);  // older tasks not yet rendered
   const [allTasks, setAllTasks] = useState<Task[]>([]);        // raw tasks for the info column
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [rescanning, setRescanning] = useState(false);
   const [input, setInput] = useState("");
   const [refUrl, setRefUrl] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -421,6 +451,18 @@ export default function SitePage() {
       setSite(data);
     } catch { router.push("/dashboard"); return; }
     await loadHistory();
+  }
+
+  /* ── Re-scan the site to refresh file structure ──────────────────────────── */
+  async function handleRescan() {
+    if (!site) return;
+    setRescanning(true);
+    try {
+      await api.post(`/api/sites/${site.id}/scan`);
+      const { data } = await api.get<Site>(`/api/sites/${site.id}`);
+      setSite(data);
+    } catch { /* ignore scan errors, keep stale data */ }
+    finally { setRescanning(false); }
   }
 
   /* ── Load & reconstruct task history ─────────────────────────────────────── */
@@ -748,7 +790,7 @@ export default function SitePage() {
       </aside>
 
       {/* ── Project info column ── */}
-      <ProjectInfo site={site} tasks={allTasks} onRollback={handleRollback} />
+      <ProjectInfo site={site} tasks={allTasks} onRollback={handleRollback} onRescan={handleRescan} rescanning={rescanning} />
 
       {/* ── Main ── */}
       <main className="flex-1 flex flex-col overflow-hidden">
