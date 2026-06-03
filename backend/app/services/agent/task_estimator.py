@@ -53,7 +53,13 @@ class TaskEstimator:
         if site.file_structure:
             entries = site.file_structure.get("entries", [])
             if entries:
-                parts.append("Структура файлов (выборка):\n" + "\n".join(entries[:100]))
+                # Exclude compiled output — show only source files so the LLM
+                # never puts dist/build/.next paths into files_to_touch.
+                _SKIP = ("/dist/", "/build/", "/.next/", "/out/", "/node_modules/", "__pycache__")
+                source_entries = [e for e in entries if not any(s in e for s in _SKIP)]
+                # Always prefer source entries; fall back to full list if scan only found dist
+                shown = source_entries if source_entries else entries
+                parts.append("Структура файлов (только исходники):\n" + "\n".join(shown[:120]))
         if site.installed_plugins:
             active = site.installed_plugins.get("active", [])
             if active:
