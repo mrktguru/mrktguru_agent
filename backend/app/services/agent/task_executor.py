@@ -259,38 +259,36 @@ class TaskExecutor:
 
     def _apply_change(self, filepath: str, action: str, content: str, find: str) -> None:
         if action == "append":
-            # Escape content and append to file
-            escaped = content.replace("'", "'\"'\"'")
-            rc, _, stderr = self._ssh.run(
-                f"echo '{escaped}' >> {filepath}", timeout=30
-            )
-            if rc != 0:
-                raise RuntimeError(f"Append to {filepath} failed: {stderr}")
+            py_script = f"open({repr(filepath)}, 'a').write({repr(content)})"
+            self._run_py(py_script, f"Append to {filepath}")
 
         elif action == "replace":
             if not find:
                 raise ValueError("action=replace requires 'find' field")
-            # Write a Python one-liner on the server to do the replacement
             py_script = (
-                f"import sys; content = open({repr(filepath)}).read(); "
+                f"content = open({repr(filepath)}).read(); "
                 f"new = content.replace({repr(find)}, {repr(content)}, 1); "
                 f"open({repr(filepath)}, 'w').write(new)"
             )
-            rc, _, stderr = self._ssh.run(f"python3 -c {repr(py_script)}", timeout=30)
-            if rc != 0:
-                raise RuntimeError(f"Replace in {filepath} failed: {stderr}")
+            self._run_py(py_script, f"Replace in {filepath}")
 
         elif action == "create":
-            # Create directory if needed
             import posixpath
             dirpath = posixpath.dirname(filepath)
             self._ssh.run(f"mkdir -p {dirpath}", timeout=10)
-            escaped = content.replace("'", "'\"'\"'")
-            rc, _, stderr = self._ssh.run(
-                f"cat > {filepath} << 'SITEDOC_EOF'\n{content}\nSITEDOC_EOF", timeout=30
-            )
-            if rc != 0:
-                raise RuntimeError(f"Create {filepath} failed: {stderr}")
+            py_script = f"open({repr(filepath)}, 'w').write({repr(content)})"
+            self._run_py(py_script, f"Create {filepath}")
+
+    def _run_py(self, py_script: str, context: str) -> None:
+        """Execute a Python snippet on the remote server via base64 to avoid shell quoting issues."""
+        import base64
+        encoded = base64.b64encode(py_script.encode()).decode()
+        rc, _, stderr = self._ssh.run(
+            f"python3 -c \"exec(__import__('base64').b64decode('{encoded}').decode())\"",
+            timeout=30,
+        )
+        if rc != 0:
+            raise RuntimeError(f"{context} failed: {stderr}")
 
     def _record_diff(self, filepath: str, action: str, content: str, find: str) -> None:
         """Accumulate a rough added/removed line count per file for the UI badge."""
