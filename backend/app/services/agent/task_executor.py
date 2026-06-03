@@ -202,6 +202,16 @@ class TaskExecutor:
         is_docker = bool(getattr(self._site, "is_docker", False))
         needs_rebuild = bool(getattr(self._site, "needs_rebuild", False))
 
+        # Infer rebuild need from the extensions of the files we just changed.
+        # This handles bare-metal Vite/React/Vue sites where the scanner stored
+        # needs_rebuild=False because the site was initially classified as non-Docker
+        # (the scanner only sets needs_rebuild=True for Docker-based frontends).
+        if not needs_rebuild and not is_docker:
+            _FRONTEND_EXTS = {"ts", "tsx", "js", "jsx", "vue", "css", "scss", "svelte"}
+            changed = self._task.changed_files or []
+            if any(p.rsplit(".", 1)[-1] in _FRONTEND_EXTS for p in changed if "." in p):
+                needs_rebuild = True
+
         if is_docker and needs_rebuild:
             self._docker_rebuild(subtask_index)  # builds, restarts and waits for health
             self._verify_up(subtask_index, verify_url)
@@ -332,10 +342,32 @@ class TaskExecutor:
 
     def _npm_rebuild(self, subtask_index: int | None = None) -> None:
         """Run npm run build for bare-metal Vite/React/Vue/Next.js projects."""
-        root = self._site.site_root_path or ""
+        root = (self._site.site_root_path or "").rstrip("/")
         if not root:
             return
-        self._log(f"⚙ Пересобираю проект (npm run build)...", "running", subtask_index)
+
+        # If site_root_path points to compiled output (dist/build/.next/out/public),
+        # resolve to the parent source directory which has package.json and the build script.
+        last_segment = root.split("/")[-1]
+        if last_segment in ("dist", "build", ".next", "out", "public"):
+            parent = root.rsplit("/", 1)[0]
+            rc, out, _ = self._ssh.run(
+                f"[ -f '{parent}/package.json' ] && echo yes || echo no", timeout=8
+            )
+            if out.strip() == "yes":
+                root = parent
+
+        # Confirm package.json exists before attempting build
+        rc, out, _ = self._ssh.run(
+            f"[ -f '{root}/package.json' ] && echo yes || echo no", timeout=8
+        )
+        if out.strip() != "yes":
+            self._log(
+                f"⚠ package.json не найден в {root}, сборка пропущена", "running", subtask_index
+            )
+            return
+
+        self._log(f"⚙ Пересобираю проект (npm run build в {root})...", "running", subtask_index)
         rc, out, err = self._ssh.run(
             f"cd {root} && npm run build 2>&1 | tail -40",
             timeout=300,

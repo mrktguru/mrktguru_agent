@@ -62,15 +62,33 @@ class SiteScanner:
                 )
             result.update(docker_info)
         elif known_is_docker is False:
-            # Explicitly non-Docker site
+            # Explicitly non-Docker site. Try to detect if it's a bare-metal
+            # frontend project that needs `npm run build` after source edits.
+            framework = hints.get("framework")
+            needs_rebuild = False
+            _FRONTEND_FW = {"nextjs", "react", "vue", "nuxt", "vite", "angular"}
+            if not framework or framework not in _FRONTEND_FW:
+                # Try detecting from package.json at the site root (or parent of dist)
+                check_root = hints.get("site_root_path", "")
+                if check_root:
+                    last = check_root.rstrip("/").split("/")[-1]
+                    if last in ("dist", "build", ".next", "out", "public"):
+                        check_root = check_root.rsplit("/", 1)[0]
+                    pkg = self._run(f"cat '{check_root}/package.json' 2>/dev/null | head -50")
+                    if pkg:
+                        detected = self._parse_framework_from_pkg(pkg)
+                        if detected in _FRONTEND_FW:
+                            framework = detected
+            if framework in _FRONTEND_FW:
+                needs_rebuild = True
             result.update({
                 "is_docker": False,
                 "docker_compose_dir": None,
                 "docker_container_name": None,
                 "docker_service_name": None,
                 "source_path": None,
-                "framework": hints.get("framework"),
-                "needs_rebuild": False,
+                "framework": framework,
+                "needs_rebuild": needs_rebuild,
             })
         else:
             # No prior info — full server-wide detection (legacy path)

@@ -338,6 +338,11 @@ function ProjectInfo({ site, tasks, onRollback, onRescan, rescanning }: {
   const tree = buildTree(site.file_structure ?? null);
   const restorePoints = tasks.filter((t) => t.backup_available);
 
+  // Files that were changed but aren't inside the file tree (e.g. source files
+  // when the tree shows the compiled dist/ directory). Display them separately.
+  const treePathSet = new Set(site.file_structure?.entries ?? []);
+  const orphanDiffs = Object.entries(diffs).filter(([p]) => !treePathSet.has(p));
+
   return (
     <aside className="w-72 bg-surface border-r border-border flex-shrink-0 overflow-y-auto">
       {/* Server / stack */}
@@ -378,6 +383,24 @@ function ProjectInfo({ site, tasks, onRollback, onRescan, rescanning }: {
           <p className="text-xs text-text-muted">Структура пока не просканирована.</p>
         )}
       </div>
+
+      {/* Source files changed outside the file tree (e.g. edits to src/ when tree shows dist/) */}
+      {orphanDiffs.length > 0 && (
+        <div className="px-4 py-3 border-b border-border">
+          <h3 className="text-[11px] font-semibold text-text-muted uppercase tracking-wide mb-2">Изменённые файлы</h3>
+          <div className="space-y-0.5">
+            {orphanDiffs.map(([path, d]) => (
+              <div key={path} className="flex items-center justify-between gap-2 py-0.5">
+                <span className="text-[11px] text-text-sub font-mono truncate" title={path}>{path.split("/").pop()}</span>
+                <span className="flex-shrink-0 flex items-center gap-0.5 font-mono text-[10px]">
+                  {d.added > 0 && <span className="text-emerald-600">+{d.added}</span>}
+                  {d.removed > 0 && <span className="text-red-500">−{d.removed}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Backups / restore points */}
       <div className="px-4 py-3">
@@ -681,6 +704,8 @@ export default function SitePage() {
         setBusy(false);
         ws.close();
         delete wsRef.current[taskId];
+        // Refresh allTasks so the restore-points sidebar reflects the new backup
+        loadHistory();
       }
     };
     ws.onerror = () => {
