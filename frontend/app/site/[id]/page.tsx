@@ -58,7 +58,7 @@ type MsgAnalyzing = { kind: "analyzing" };
 type MsgClarify = { kind: "clarify"; data: Clarification };
 type MsgEstimate = { kind: "estimate"; data: TaskEstimate; subtasks: Subtask[] };
 type MsgRunning = { kind: "running"; taskId: string; backupAvailable?: boolean; isRollback?: boolean };
-type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[]; backupAvailable?: boolean; errorMessage?: string | null };
+type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null };
 type MsgError = { kind: "error"; text: string };
 
 type ChatMsg = MsgUser | MsgAnalyzing | MsgClarify | MsgEstimate | MsgRunning | MsgDone | MsgError;
@@ -555,10 +555,10 @@ export default function SitePage() {
           break;
         case "done":
         case "failed":
-          out.push({ kind: "done", status: t.status, taskId: t.id, logs: [], backupAvailable: t.backup_available, errorMessage: t.error_message });
+          out.push({ kind: "done", status: t.status, taskId: t.id, logs: null, backupAvailable: t.backup_available, errorMessage: t.error_message });
           break;
         case "rolled_back":
-          out.push({ kind: "done", status: "rolled_back", taskId: t.id, logs: [], backupAvailable: false });
+          out.push({ kind: "done", status: "rolled_back", taskId: t.id, logs: null, backupAvailable: false });
           break;
       }
     }
@@ -929,8 +929,8 @@ export default function SitePage() {
                       : "SiteDoc AI — завершено с ошибками"
                     }>
                       <LogBlock
-                        logs={msg.logs.length ? msg.logs : undefined}
-                        lazy={msg.logs.length === 0}
+                        logs={msg.logs?.length ? msg.logs : undefined}
+                        lazy={!msg.logs || msg.logs.length === 0}
                         autoExpand={idx === messages.length - 1}
                         siteId={id}
                         taskId={msg.taskId}

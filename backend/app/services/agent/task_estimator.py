@@ -14,10 +14,11 @@ _SKIP_DIRS = ("/dist/", "/build/", "/.next/", "/out/", "/node_modules/", "__pyca
 
 
 class TaskEstimator:
-    def __init__(self, site: Site, task: Task, ssh=None) -> None:
+    def __init__(self, site: Site, task: Task, ssh=None, previous_tasks=None) -> None:
         self._site = site
         self._task = task
         self._ssh = ssh  # SSHClient | None  — live SSH for fresh file reads
+        self._previous_tasks: list = list(previous_tasks or [])
 
     async def estimate(self) -> dict:
         site_context = self._build_site_context()
@@ -43,6 +44,12 @@ class TaskEstimator:
     def _build_site_context(self) -> str:
         site = self._site
         parts = [f"КОНТЕКСТ САЙТА: {site.name}"]
+
+        # ── Task history context ───────────────────────────────────────────────
+        history = self._build_task_history_context()
+        if history:
+            parts.append(history)
+
         if site.url:
             parts.append(f"URL: {site.url}")
         if site.cms:
@@ -96,6 +103,39 @@ class TaskEstimator:
                 parts.append("Активные плагины: " + ", ".join(active[:20]))
 
         return "\n".join(parts)
+
+    def _build_task_history_context(self) -> str:
+        """Return a formatted summary of recent completed tasks for the estimator.
+
+        Gives Claude the vocabulary to understand follow-up messages like
+        "the changes didn't apply" — it can reference specific files and
+        what was attempted without the user having to repeat themselves.
+        """
+        if not self._previous_tasks:
+            return ""
+        status_ru = {
+            "done": "выполнено", "failed": "ошибка",
+            "rolled_back": "откатано", "running": "выполняется",
+        }
+        lines = ["ИСТОРИЯ ЗАДАЧ САЙТА (последние выполненные):"]
+        for i, t in enumerate(self._previous_tasks[:5], 1):
+            st = status_ru.get(t.status, t.status)
+            title = (t.title or (t.tz_text or ""))[:70]
+            ts = ""
+            if getattr(t, "updated_at", None):
+                ts = t.updated_at.strftime("%d %b %H:%M")
+            lines.append(f"\n[{i}] «{title}» — {st} {ts}".rstrip())
+            if t.changed_files:
+                lines.append(f"    Изменены файлы: {', '.join(t.changed_files[:6])}")
+            if t.file_diffs:
+                diffs = [
+                    f"{p.split('/')[-1]} (+{d.get('added', 0)}-{d.get('removed', 0)})"
+                    for p, d in list(t.file_diffs.items())[:4]
+                ]
+                lines.append(f"    Правки: {', '.join(diffs)}")
+            if t.status == "failed" and getattr(t, "error_message", None):
+                lines.append(f"    Ошибка: {(t.error_message or '')[:120]}")
+        return "\n".join(lines)
 
     # ── Design-system files: always read for frontend projects ────────────────
     _DESIGN_SYSTEM_FILES = [

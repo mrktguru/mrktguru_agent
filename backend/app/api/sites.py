@@ -266,9 +266,20 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
     except Exception:
         ssh_client = None  # silently degrade — estimation still works via DB
 
+    # Fetch recent completed tasks so the estimator can understand follow-up messages
+    # (e.g. "the changes didn't apply" → agent sees what files were changed last time)
+    from sqlalchemy import select as sa_select
+    prev_tasks = list(reversed((await db.scalars(
+        sa_select(Task)
+        .where(Task.site_id == uuid.UUID(site_id), Task.id != task.id,
+               Task.status.in_(["done", "failed", "rolled_back"]))
+        .order_by(Task.updated_at.desc())
+        .limit(5)
+    )).all()))
+
     # Run estimation
     try:
-        estimator = TaskEstimator(site, task, ssh=ssh_client)
+        estimator = TaskEstimator(site, task, ssh=ssh_client, previous_tasks=prev_tasks)
         estimate = await estimator.estimate()
     except Exception as exc:
         task.status = "failed"
