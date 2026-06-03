@@ -18,19 +18,73 @@ class SiteScanner:
     def __init__(self, ssh: SSHClient) -> None:
         self._ssh = ssh
 
-    def scan(self) -> dict:
+    def scan(self, hints: dict | None = None) -> dict:
+        """Scan a single site.
+
+        hints — optional dict from the already-known site record so we don't
+        re-discover the wrong project on a multi-project server:
+          - docker_compose_dir: use this compose dir instead of searching
+          - site_root_path:     use this root instead of searching
+          - is_docker:          skip Docker detection if already known
+          - framework:          skip framework detection if already known
+        """
+        hints = hints or {}
         result: dict = {}
         result["server_os"] = self._get_os()
         result["php_version"] = self._get_php_version()
         result["web_server"] = self._get_web_server()
 
-        # ── Docker detection (must happen before site_root) ────────────────
-        docker_info = self._detect_docker()
-        result.update(docker_info)
+        # ── Docker detection ───────────────────────────────────────────────
+        # If we already know the compose dir (user picked this project during
+        # discovery), skip the server-wide search and just refresh the details
+        # for that specific directory — avoids picking a neighbour project.
+        known_compose_dir = hints.get("docker_compose_dir")
+        known_is_docker = hints.get("is_docker")
+
+        if known_compose_dir:
+            # Scan only the known compose project, skip server-wide detection
+            docker_info: dict = {
+                "is_docker": True,
+                "docker_compose_dir": known_compose_dir,
+                "docker_container_name": None,
+                "docker_service_name": None,
+                "source_path": None,
+                "framework": hints.get("framework"),
+                "needs_rebuild": False,
+            }
+            score, _, service, source, framework = self._score_compose(known_compose_dir)
+            if score >= 0:
+                docker_info["docker_service_name"] = service
+                docker_info["source_path"] = source
+                docker_info["framework"] = framework or hints.get("framework")
+                docker_info["needs_rebuild"] = (docker_info["framework"] or "") in (
+                    "nextjs", "react", "vue", "nuxt", "vite", "angular"
+                )
+            result.update(docker_info)
+        elif known_is_docker is False:
+            # Explicitly non-Docker site
+            result.update({
+                "is_docker": False,
+                "docker_compose_dir": None,
+                "docker_container_name": None,
+                "docker_service_name": None,
+                "source_path": None,
+                "framework": hints.get("framework"),
+                "needs_rebuild": False,
+            })
+        else:
+            # No prior info — full server-wide detection (legacy path)
+            docker_info = self._detect_docker()
+            result.update(docker_info)
 
         # ── Site root ──────────────────────────────────────────────────────
-        if docker_info.get("is_docker"):
-            site_root = docker_info.get("source_path", "") or self._get_site_root()
+        known_root = hints.get("site_root_path")
+        if known_root:
+            # Trust the root from discovery; just verify it exists
+            exists = self._run(f"[ -d {known_root!r} ] && echo yes || echo no")
+            site_root = known_root if exists == "yes" else self._get_site_root()
+        elif result.get("is_docker"):
+            site_root = result.get("source_path", "") or self._get_site_root()
         else:
             site_root = self._get_site_root()
 

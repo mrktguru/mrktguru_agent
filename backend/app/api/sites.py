@@ -186,11 +186,20 @@ async def scan_site(site_id: str, user: CurrentUser, db: DB) -> SiteScanResult:
     site.status = "scanning"
     await db.commit()
 
+    # Pass already-known hints so the scanner doesn't re-detect the wrong project
+    # on a multi-project server (the user already picked the right one during discovery).
+    hints = {
+        "docker_compose_dir": site.docker_compose_dir,
+        "site_root_path": site.site_root_path,
+        "is_docker": site.is_docker,
+        "framework": site.framework,
+    }
+
     try:
         ssh_client = await _build_ssh(site, db)
         with ssh_client as ssh:
             scanner = SiteScanner(ssh)
-            info = scanner.scan()
+            info = scanner.scan(hints=hints)
     except Exception as exc:
         site.status = "error"
         await db.commit()
@@ -204,12 +213,12 @@ async def scan_site(site_id: str, user: CurrentUser, db: DB) -> SiteScanResult:
     site.site_root_path = info.get("site_root_path")
     site.file_structure = info.get("file_structure")
     site.installed_plugins = info.get("installed_plugins")
-    # Docker fields
+    # Docker fields — prefer hints if scan couldn't determine them
     site.is_docker = info.get("is_docker", False)
-    site.docker_compose_dir = info.get("docker_compose_dir")
+    site.docker_compose_dir = info.get("docker_compose_dir") or site.docker_compose_dir
     site.docker_service_name = info.get("docker_service_name")
     site.docker_container_name = info.get("docker_container_name")
-    site.framework = info.get("framework")
+    site.framework = info.get("framework") or site.framework
     site.needs_rebuild = info.get("needs_rebuild", False)
     site.status = "active"
     await db.commit()
