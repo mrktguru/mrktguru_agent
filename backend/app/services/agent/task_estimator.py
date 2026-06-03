@@ -245,7 +245,29 @@ class TaskEstimator:
         class_refs = re.findall(r"\.[a-z][\w-]{2,}", tz_text)
         terms.extend(class_refs[:3])
 
-        return terms[:5] if terms else ["background", "color", "a[^,{]*{"]
+        # Literal term extraction — abbreviations and quoted names from the TZ text.
+        # These are domain-specific identifiers the user wrote that appear verbatim
+        # in code (e.g. "ЧЗ", "SKU", `labelField`), not generic CSS keywords.
+        # Skip noise words that match many files and add no signal.
+        _LITERAL_SKIP = {
+            "CSS", "JS", "TS", "URL", "API", "UI", "UX", "БД", "ТЗ",
+            "HTML", "JSON", "SSH", "HTTP", "PHP", "SQL",
+        }
+        # Uppercase Cyrillic abbreviations: ЧЗ, НДС, АИС, etc.
+        for word in re.findall(r'\b[А-ЯЁ]{2,6}\b', tz_text):
+            if word not in _LITERAL_SKIP and re.escape(word) not in terms:
+                terms.append(re.escape(word))
+        # Uppercase Latin abbreviations (not already filtered as common): SKU, EAN, etc.
+        for word in re.findall(r'\b[A-Z]{2,6}\b', tz_text):
+            if word not in _LITERAL_SKIP and re.escape(word) not in terms:
+                terms.append(re.escape(word))
+        # Quoted / backtick-quoted names: "поле X", `blockName`, «Блок ЧЗ»
+        for word in re.findall(r'["`«»]([^"`«»]{2,30})["`«»]', tz_text):
+            w = word.strip()
+            if w and re.escape(w) not in terms:
+                terms.append(re.escape(w))
+
+        return terms[:7] if terms else ["background", "color", "a[^,{]*{"]
 
     def _build_user_message(self) -> str:
         lines = [f"ТЗ:\n{self._task.tz_text}"]

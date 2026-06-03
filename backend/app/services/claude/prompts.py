@@ -226,9 +226,19 @@ ESTIMATOR_SYSTEM = dedent("""\
     - CSS правка = 2-5 кр, JS функция = 5-15 кр, новая страница = 15-30 кр
     - Риск: low = CSS/текст, medium = JS/шаблоны, high = БД/конфиги
 
+    ОСОБЫЙ СЛУЧАЙ — задачи "скрыть/убрать/спрятать поле/блок/секцию":
+    Это ДОБАВЛЕНИЕ переключателя видимости (toggle), а НЕ удаление кода.
+    Реализация (useState + conditional render) принципиально зависит от одного вопроса:
+    нужно ли запоминать что блок скрыт после перезагрузки страницы?
+    - ДА → localStorage или userPreferences в DB (2 разные архитектуры)
+    - НЕТ → простой useState, всегда показывать по умолчанию
+    ОБЯЗАТЕЛЬНО задай этот вопрос первым если задача содержит слова:
+    скрыть, убрать, спрятать, скрывать, скрытый, hide, toggle — применительно к полю/блоку/секции.
+
     Уточнение нужно ТОЛЬКО если задача принципиально неоднозначна и без ответа нельзя написать ни строчки кода:
     - «поменяй цвет» и нет ни одного намёка на цветовую схему сайта → спроси
     - «добавь страницу» и непонятен URL, контент, место в навигации → спроси
+    - «скрыть блок/поле» → спроси нужно ли сохранять состояние (см. выше)
     Во всех остальных случаях — делай разумные допущения и разбивай на подзадачи.
 
     СТРОГО ЗАПРЕЩЕНО задавать вопросы про:
@@ -305,6 +315,36 @@ EXECUTOR_SYSTEM = dedent("""\
     - text-gray-500 если есть text-text-sub — всегда используй семантические токены
     - Добавлять background к a{}, a:hover{} — ссылки без фона по умолчанию
     - Писать новый CSS в .css файл если можно сделать Tailwind-классом в TSX
+
+    КАК РЕАЛИЗОВАТЬ СКРЫВАЕМЫЙ БЛОК (toggle/collapsible) в React/TSX:
+
+    Вариант A — без сохранения (сбрасывается при перезагрузке):
+      const [showBlock, setShowBlock] = useState(true)
+      <button onClick={() => setShowBlock(v => !v)} className="p-1 rounded text-text-sub hover:bg-surface-3 transition-colors text-xs">
+        {showBlock ? 'Скрыть' : 'Показать'}
+      </button>
+      {showBlock && <div>...содержимое блока...</div>}
+
+    Вариант B — с сохранением в localStorage (помнит между сессиями):
+      const [showBlock, setShowBlock] = useState(() => localStorage.getItem('show_BLOCKNAME') !== 'false')
+      const toggleBlock = () => { const next = !showBlock; setShowBlock(next); localStorage.setItem('show_BLOCKNAME', String(next)) }
+      <button onClick={toggleBlock} className="p-1 rounded text-text-sub hover:bg-surface-3 transition-colors text-xs">
+        {showBlock ? 'Скрыть' : 'Показать'}
+      </button>
+      {showBlock && <div>...содержимое блока...</div>}
+
+    Вариант C — крестик "×" в заголовке блока (только закрыть, открыть через кнопку снаружи):
+      const [showBlock, setShowBlock] = useState(true)
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium text-text-sub">Название блока</h3>
+        <button onClick={() => setShowBlock(false)} className="p-1 rounded hover:bg-surface-3 transition-colors">
+          <X size={14} className="text-text-muted" />
+        </button>
+      </div>
+      {showBlock && <div>...содержимое...</div>}
+
+    ПРАВИЛО: при задаче "убрать/скрыть блок" — НЕ удаляй JSX, а оберни в условный рендер.
+    Используй вариант из описания subtask (A/B/C); если не указан — используй вариант A (useState).
 
     КАК ДЕЛАТЬ КРАСИВЫЕ КНОПКИ (Tailwind паттерны):
     - Основная (CTA):   className="bg-accent text-white px-4 py-2 rounded-xl hover:bg-accent-hover transition-colors font-medium text-sm"
