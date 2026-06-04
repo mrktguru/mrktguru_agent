@@ -28,6 +28,20 @@ class Task(UUIDMixin, TimestampMixin, Base):
     # Parsed subtasks (list of {id, title, description, files_to_touch, estimated_credits, risk})
     subtasks: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
+    # ── Two-level triage + typed tracks (AGENT_ARCHITECTURE.md) ──────────────
+    intent: Mapped[str | None] = mapped_column(String, nullable=True)       # action|fix|info|ops|control|reject
+    task_type: Mapped[str | None] = mapped_column(String, nullable=True)    # tweak|integration|parser|bugfix|...
+    # Typed tracks: [{track_id, intent, type, summary, depends_on[], risk, integration?, subtasks[]}]
+    tracks: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Triage decision log: {intent, type, confidence, reasoning}
+    triage: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Pause-for-human: {message, required_fields[], track_id} when status=waiting_for_user
+    pending_input: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Serialized agent tool-use thread, to resume the loop after a pause
+    agent_state: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Answer text for info-intent tasks (status=answered, no edits)
+    answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Estimation
     estimated_credits: Mapped[float | None] = mapped_column(Float, nullable=True)
     estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -35,6 +49,7 @@ class Task(UUIDMixin, TimestampMixin, Base):
     confidence: Mapped[str | None] = mapped_column(String, nullable=True)  # high|medium|low
 
     # Status flow: pending → estimated → approved → running → done | failed | rolled_back
+    # plus: clarifying, rolling_back, waiting_for_user, answered, rejected
     status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
 
     # Clarification dialog history: [{questions: [...], answer: str}]

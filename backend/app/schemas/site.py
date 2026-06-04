@@ -93,12 +93,51 @@ class SubtaskEstimate(BaseModel):
     enabled: bool = True
 
 
+class IntegrationBlock(BaseModel):
+    provider: str
+    required_secrets: list[str] = []
+    callback_path: str | None = None
+    steps: list[str] = []
+
+
+class TrackEstimate(BaseModel):
+    track_id: str
+    intent: str           # action | fix | ops
+    type: str             # tweak | feature | integration | parser | ...
+    summary: str
+    depends_on: list[str] = []
+    risk: str = "low"
+    integration: IntegrationBlock | None = None
+    subtasks: list[SubtaskEstimate] = []
+
+
 class TaskEstimateResponse(BaseModel):
     task_id: str
     subtasks: list[SubtaskEstimate]
     total_credits: float
     confidence: str
     estimated_minutes: int
+    # New: typed tracks (subtasks above kept flat for backward-compat UI)
+    tracks: list[TrackEstimate] | None = None
+    intent: str | None = None
+    type: str | None = None
+
+
+class RejectResponse(BaseModel):
+    task_id: str
+    status: str = "rejected"
+    reason: str
+    message: str
+
+
+class AnswerResponse(BaseModel):
+    task_id: str
+    status: str = "answered"
+    answer: str
+
+
+class ResumeRequest(BaseModel):
+    provided_fields: dict[str, str]
 
 
 class ClarificationResponse(BaseModel):
@@ -131,6 +170,13 @@ class TaskPublic(BaseModel):
     error_message: str | None
     backup_available: bool
     created_at: datetime
+    # Two-level triage + typed tracks + pause
+    intent: str | None = None
+    type: str | None = None
+    tracks: list[dict] | None = None
+    triage: dict | None = None
+    pending_input: dict | None = None
+    answer_text: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -155,6 +201,12 @@ class TaskPublic(BaseModel):
             error_message=t.error_message,
             backup_available=bool(getattr(t, "backup_available", False)),
             created_at=t.created_at,
+            intent=getattr(t, "intent", None),
+            type=getattr(t, "task_type", None),
+            tracks=getattr(t, "tracks", None),
+            triage=getattr(t, "triage", None),
+            pending_input=getattr(t, "pending_input", None),
+            answer_text=getattr(t, "answer_text", None),
         )
 
 
