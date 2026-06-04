@@ -23,6 +23,26 @@ _SUPPORTED_CMS_RELOAD = {
     "bitrix": [],
 }
 
+# Subtask type → specialized agent layer (default: task_agent)
+_TYPE_AGENT_LAYER = {
+    "integration": "integration_agent",
+    "parser": "parser_agent",
+    "new_parser": "parser_agent",
+}
+# Types whose tracks run run_command through the ops allowlist
+_OPS_TYPES = {"devops", "maintenance", "security", "deploy", "data_migration"}
+
+
+class PauseSignal(Exception):
+    """Raised when the agent calls request_user_input — suspends the whole task.
+
+    Carries everything needed to set status=waiting_for_user and resume later.
+    """
+    def __init__(self, pending_input: dict, resume_state: dict) -> None:
+        super().__init__(pending_input.get("message", "waiting for user"))
+        self.pending_input = pending_input
+        self.resume_state = resume_state
+
 
 class TaskExecutor:
     def __init__(
@@ -47,21 +67,62 @@ class TaskExecutor:
         self._recent_edits: list[str] = []
 
     def execute(self) -> None:
-        """Execute all approved subtasks sequentially."""
+        """Execute all approved subtasks sequentially.
+
+        Supports resume after a request_user_input pause: if task.agent_state is set,
+        skip completed subtasks and continue the paused one from its serialized thread.
+        """
         subtasks = self._task.subtasks or []
         enabled = [s for s in subtasks if s.get("enabled", True)]
         changed_files: list[str] = []
-        # Accumulated per-file line diffs: {path: {"added": int, "removed": int}}
         self._file_diffs: dict[str, dict[str, int]] = {}
 
-        for idx, subtask in enumerate(enabled):
+        # ── Resume from a pause? ─────────────────────────────────────────────
+        start_idx = 0
+        resume_payload = None
+        state = self._task.agent_state or None
+        if state:
+            start_idx = state.get("idx", 0)
+            changed_files = list(state.get("changed_files", []) or [])
+            self._file_diffs = state.get("file_diffs", {}) or {}
+            resume_payload = state.get("resume")
+            # Write any provided secrets to the project's .env before resuming
+            if resume_payload and resume_payload.get("provided_fields"):
+                try:
+                    self._apply_env_secrets(resume_payload["provided_fields"])
+                except Exception as e:
+                    self._log(f"⚠ Не удалось записать .env: {e}", "running", start_idx)
+            self._task.agent_state = None
+            self._task.pending_input = None
+            self._db.commit()
+
+        for idx in range(start_idx, len(enabled)):
+            subtask = enabled[idx]
             self._log(f"━━━ Задача {idx+1}/{len(enabled)}: {subtask['title']} ━━━", "running", idx)
             try:
-                files = self._execute_subtask(idx, subtask)
-                # Persist originals as a tar so manual rollback works later
+                files = self._execute_subtask(
+                    idx, subtask, resume=resume_payload if idx == start_idx else None
+                )
                 self._backup.finalize_subtask_backup(str(self._task.id), idx)
                 changed_files.extend(files)
                 self._log(f"✓ Готово", "success", idx)
+            except PauseSignal as pause:
+                # Suspend the WHOLE task — keep edits, persist thread to resume later.
+                self._backup.finalize_subtask_backup(str(self._task.id), idx)
+                self._task.changed_files = list(set(changed_files))
+                self._task.file_diffs = self._file_diffs or None
+                self._task.pending_input = pause.pending_input
+                self._task.agent_state = {
+                    "idx": idx,
+                    "changed_files": changed_files,
+                    "file_diffs": self._file_diffs,
+                    "resume": pause.resume_state,
+                }
+                self._task.status = "waiting_for_user"
+                self._task.backup_available = self._backup.has_backups(str(self._task.id))
+                self._db.commit()
+                self._log(f"⏸ Жду данные от пользователя: {pause.pending_input.get('message','')[:160]}", "running", idx)
+                return  # stop cleanly; /resume re-enqueues run_execute
             except Exception as exc:
                 self._log(f"✗ Ошибка: {exc}", "error", idx)
                 self._log(f"↩ Откатываю изменения подзадачи {idx+1}...", "running", idx)
@@ -70,24 +131,26 @@ class TaskExecutor:
                     self._log(f"↩ Откат выполнен", "rollback", idx)
                 except Exception as re_exc:
                     self._log(f"⚠ Откат не удался: {re_exc}", "error", idx)
-                # Continue with next subtask
                 continue
+            resume_payload = None
 
-        # Update task
         self._task.changed_files = list(set(changed_files))
         self._task.file_diffs = self._file_diffs or None
         self._task.status = "done"
-        # Backups are kept (not cleaned up) so the user can roll back manually.
         self._task.backup_available = self._backup.has_backups(str(self._task.id))
         self._db.commit()
 
-    def _execute_subtask(self, idx: int, subtask: dict) -> list[str]:
+    def _execute_subtask(self, idx: int, subtask: dict, resume: dict | None = None) -> list[str]:
         """Run a subtask as an autonomous agent: investigate the code with tools,
         make targeted edits, then self-verify — instead of one blind JSON plan."""
-        self._recent_edits = []
-        self._verify_markers = []
-        self._log("🔍 Изучаю проект инструментами...", "running", idx)
-        return self._run_agentic_subtask(idx, subtask)
+        if not resume:
+            self._recent_edits = []
+            self._verify_markers = []
+            self._log("🔍 Изучаю проект инструментами...", "running", idx)
+        else:
+            self._recent_edits = list(resume.get("recent_edits", []))
+            self._log("▶ Продолжаю задачу после паузы...", "running", idx)
+        return self._run_agentic_subtask(idx, subtask, resume=resume)
 
     # ── Agentic tool-use loop ─────────────────────────────────────────────────
 
@@ -158,6 +221,27 @@ class TaskExecutor:
                 },
             },
             {
+                "name": "request_user_input",
+                "description": (
+                    "Приостановить задачу и запросить данные у пользователя: секреты "
+                    "(client_id/secret/API-ключи), регистрацию в кабинете провайдера, "
+                    "подтверждение рискованного действия, бизнес-логику или выбор. "
+                    "Вызывай ВМЕСТО finish, когда без данных человека продолжить нельзя. "
+                    "Секреты будут записаны в .env, и задача продолжится автоматически."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Точная инструкция пользователю что сделать/прислать"},
+                        "required_fields": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "Имена полей/секретов, которые нужны (напр. YANDEX_CLIENT_ID)",
+                        },
+                    },
+                    "required": ["message", "required_fields"],
+                },
+            },
+            {
                 "name": "finish",
                 "description": (
                     "Вызвать когда все правки внесены. Система пересоберёт проект и проверит сайт; "
@@ -179,43 +263,104 @@ class TaskExecutor:
             },
         ]
 
-    def _run_agentic_subtask(self, idx: int, subtask: dict) -> list[str]:
-        layer = resolve("task_agent")
+    def _apply_env_secrets(self, fields: dict) -> None:
+        """Upsert KEY=value pairs into the project's .env on the server (idempotent)."""
+        if not fields:
+            return
+        root = self._source_root()
+        envpath = f"{root}/.env"
+        py = (
+            "import os, json\n"
+            f"p = {envpath!r}\n"
+            f"kv = json.loads({json.dumps(json.dumps(fields))})\n"
+            "lines = open(p).read().splitlines() if os.path.exists(p) else []\n"
+            "out, seen = [], set()\n"
+            "for l in lines:\n"
+            "    k = l.split('=',1)[0].strip() if '=' in l else None\n"
+            "    if k in kv: out.append(k+'='+str(kv[k])); seen.add(k)\n"
+            "    else: out.append(l)\n"
+            "for k,v in kv.items():\n"
+            "    if k not in seen: out.append(k+'='+str(v))\n"
+            "open(p,'w').write('\\n'.join(out)+'\\n')\n"
+        )
+        self._run_py(py, f"write .env {envpath}")
+        self._log(f"  🔐 Секреты записаны в {envpath}: {', '.join(fields.keys())}", "running", None)
+
+    @staticmethod
+    def _serialize_messages(messages: list[dict]) -> list[dict]:
+        """Convert SDK content blocks → plain dicts so the thread can be stored in
+        JSONB and replayed on resume (thinking signatures and tool_use ids preserved)."""
+        out: list[dict] = []
+        for m in messages:
+            c = m.get("content")
+            if isinstance(c, list):
+                nc = []
+                for b in c:
+                    if isinstance(b, dict):
+                        nc.append(b)
+                    elif hasattr(b, "model_dump"):
+                        nc.append(b.model_dump())
+                    else:
+                        nc.append(b)
+                out.append({"role": m["role"], "content": nc})
+            else:
+                out.append({"role": m["role"], "content": c})
+        return out
+
+    def _run_agentic_subtask(self, idx: int, subtask: dict, resume: dict | None = None) -> list[str]:
+        # Pick the specialized agent by subtask/track type
+        stype = subtask.get("track_type") or subtask.get("type") or self._task.task_type or ""
+        layer_key = _TYPE_AGENT_LAYER.get(stype, "task_agent")
+        layer = resolve(layer_key)
         client = ClaudeClient(model=layer.model)
         tools = self._agent_tools()
         system = layer.system_prompt
-        messages: list[dict] = [
-            {"role": "user", "content": self._build_agent_initial(subtask)}
-        ]
-        verify_rounds = 0
+
+        if resume:
+            messages = list(resume.get("messages", []))
+            results = list(resume.get("sibling_results", []))
+            provided = resume.get("provided_fields", {}) or {}
+            note = (
+                "Пользователь предоставил данные: " + ", ".join(provided.keys())
+                + ". Они записаны в .env проекта. Продолжай выполнение."
+            ) if provided else "Пользователь подтвердил. Продолжай."
+            results.append({
+                "type": "tool_result",
+                "tool_use_id": resume["pending_tool_use_id"],
+                "content": note,
+            })
+            messages.append({"role": "user", "content": results})
+            verify_rounds = resume.get("verify_rounds", 0)
+        else:
+            messages = [{"role": "user", "content": self._build_agent_initial(subtask)}]
+            verify_rounds = 0
 
         for _step in range(self._AGENT_MAX_STEPS):
             try:
                 resp = client.run_agent(
                     system, messages, tools,
-                    max_tokens=layer.max_tokens,
-                    thinking_tokens=self._AGENT_THINKING_TOKENS,
+                    max_tokens=layer.max_tokens, thinking_tokens=self._AGENT_THINKING_TOKENS,
                 )
             except Exception:
-                # Some models reject thinking+tools — retry once without thinking.
                 resp = client.run_agent(
                     system, messages, tools, max_tokens=layer.max_tokens, thinking_tokens=0
                 )
 
             messages.append({"role": "assistant", "content": resp.content})
-
-            # Surface the agent's visible reasoning/narration to the live log
             for block in resp.content:
                 if getattr(block, "type", "") == "text" and block.text.strip():
                     self._log("  💭 " + block.text.strip()[:240], "running", idx)
 
             tool_uses = [b for b in resp.content if getattr(b, "type", "") == "tool_use"]
             if not tool_uses:
-                break  # agent stopped without more actions
+                break
 
+            pause_tu = next((t for t in tool_uses if t.name == "request_user_input"), None)
             tool_results: list[dict] = []
             finished_ok = False
             for tu in tool_uses:
+                if tu.name == "request_user_input":
+                    continue  # its result comes from the human on resume
                 if tu.name == "finish":
                     self._verify_markers = (tu.input or {}).get("expected_markers") or []
                     verify_url = (tu.input or {}).get("verify_url")
@@ -246,11 +391,28 @@ class TaskExecutor:
                         "type": "tool_result", "tool_use_id": tu.id, "content": out[:8000],
                     })
 
+            # Pause requested → suspend the whole task (sibling results already computed)
+            if pause_tu:
+                inp = pause_tu.input or {}
+                pending = {
+                    "message": inp.get("message", ""),
+                    "required_fields": inp.get("required_fields", []),
+                    "track_id": subtask.get("track_id"),
+                }
+                self._log("  ⏸ " + pending["message"][:200], "running", idx)
+                resume_state = {
+                    "messages": self._serialize_messages(messages),
+                    "pending_tool_use_id": pause_tu.id,
+                    "sibling_results": tool_results,
+                    "recent_edits": list(self._recent_edits),
+                    "verify_rounds": verify_rounds,
+                }
+                raise PauseSignal(pending, resume_state)
+
             messages.append({"role": "user", "content": tool_results})
             if finished_ok:
                 return list(dict.fromkeys(self._recent_edits))
 
-        # Step budget exhausted — apply whatever was edited, best-effort verify
         if self._recent_edits:
             try:
                 self.rebuild_and_verify(idx, verify_url=None)
@@ -285,6 +447,17 @@ class TaskExecutor:
             return self._agent_edit(inp, idx, subtask)
         if name == "run_command":
             cmd = inp.get("command", "")
+            # ops/security tracks: gate run_command through the allowlist
+            stype = subtask.get("track_type") or subtask.get("type") or self._task.task_type or ""
+            if stype in _OPS_TYPES:
+                from app.services.agent.command_policy import ops_command_allowed
+                if not ops_command_allowed(cmd):
+                    self._log(f"  🛑 команда вне allowlist: {cmd[:80]}", "running", idx)
+                    return (
+                        "ОТКЛОНЕНО: для ops/security-задач эта команда вне белого списка и "
+                        "может быть опасной. Если она действительно нужна — вызови "
+                        "request_user_input и попроси подтверждение у пользователя."
+                    )
             self._log(f"  ⚙ $ {cmd[:80]}", "running", idx)
             rc, out, err = self._ssh.run(cmd, timeout=300)
             body = (out or "")

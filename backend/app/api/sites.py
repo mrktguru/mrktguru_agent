@@ -481,3 +481,33 @@ async def rollback_task(site_id: str, task_id: str, user: CurrentUser, db: DB) -
     run_rollback.delay(str(task.id))
 
     return TaskPublic.from_task(task)
+
+
+@router.post("/{site_id}/tasks/{task_id}/resume", response_model=TaskPublic)
+async def resume_task(
+    site_id: str, task_id: str, payload: ResumeRequest, user: CurrentUser, db: DB
+) -> TaskPublic:
+    """Resume a task paused at request_user_input (control signal clarification_response).
+
+    The provided fields (secrets/answers) are injected into the serialized agent
+    thread; the worker writes them to the project's .env and continues the loop.
+    """
+    from app.tasks.execute import run_execute
+
+    await _get_site_or_404(site_id, user.id, db)
+    task = await db.get(Task, task_id)
+    if not task or task.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "waiting_for_user":
+        raise HTTPException(status_code=400, detail=f"Задача не на паузе (статус: {task.status})")
+
+    state = dict(task.agent_state or {})
+    resume = dict(state.get("resume") or {})
+    resume["provided_fields"] = payload.provided_fields
+    state["resume"] = resume
+    task.agent_state = state
+    task.status = "approved"
+    await db.commit()
+
+    run_execute.delay(str(task.id))
+    return TaskPublic.from_task(task)

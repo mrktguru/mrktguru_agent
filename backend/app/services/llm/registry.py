@@ -24,6 +24,8 @@ from app.services.claude.prompts import (
     PHASE_4_SYSTEM,
     TASK_AUTO_FIX_SYSTEM,
     TRIAGE_ROUTER_SYSTEM,
+    INTEGRATION_AGENT_SYSTEM,
+    PARSER_AGENT_SYSTEM,
 )
 
 
@@ -74,6 +76,16 @@ LAYER_DEFAULTS: dict[str, LayerDefault] = {
         name="Агент-исполнитель (tool-use loop)",
         description="Агентный исполнитель подзадач: исследует код инструментами (read/grep/list), правит точечно, сам проверяет результат.",
         product="sitedoc", model=_MODEL, system_prompt=AGENT_SYSTEM, max_tokens=8192,
+    ),
+    "integration_agent": LayerDefault(
+        name="Агент интеграций (внешний API)",
+        description="Подключает внешний сервис (OAuth/оплата/вебхуки) по скелету провайдера, ставит паузу на секреты.",
+        product="sitedoc", model=_MODEL, system_prompt=INTEGRATION_AGENT_SYSTEM, max_tokens=8192,
+    ),
+    "parser_agent": LayerDefault(
+        name="Агент парсеров (сбор данных)",
+        description="Создаёт парсер/сборщик данных по скелету: источник→нормализация→хранилище→расписание.",
+        product="sitedoc", model=_MODEL, system_prompt=PARSER_AGENT_SYSTEM, max_tokens=8192,
     ),
     "code_gen": LayerDefault(
         name="Генерация кода",
