@@ -78,7 +78,14 @@ class ClaudeClient:
         }
         if thinking_tokens and thinking_tokens > 0:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_tokens}
-        return self.client.messages.create(**kwargs)
+        try:
+            return self.client.messages.create(**kwargs)
+        except TypeError as e:
+            # Older anthropic SDKs don't accept the `thinking` kwarg — drop it and retry.
+            if "thinking" in str(e) and "thinking" in kwargs:
+                kwargs.pop("thinking", None)
+                return self.client.messages.create(**kwargs)
+            raise
 
     def call_phase(
         self,
