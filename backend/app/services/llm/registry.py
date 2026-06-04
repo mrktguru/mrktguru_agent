@@ -38,14 +38,17 @@ class LayerDefault:
 
 
 _MODEL = settings.CLAUDE_MODEL
-# Cheap model for fast classification (triage) — saves tokens on a high-frequency call.
-_HAIKU = "claude-3-5-haiku-20241022"
+# Ideal: a cheap haiku snapshot for the high-frequency triage call. This API key
+# currently only exposes the sonnet-4 snapshot (others → 404), so triage runs on
+# _MODEL for now. When a haiku snapshot is available, override the triage_router
+# layer's model via the llm_layers DB table (admin) — no code change needed.
+_TRIAGE_MODEL = _MODEL
 
 LAYER_DEFAULTS: dict[str, LayerDefault] = {
     "triage_router": LayerDefault(
         name="Триаж (классификация запроса)",
         description="Двухуровневая классификация: намерение (intent) → тип (type). Дешёвая модель.",
-        product="sitedoc", model=_HAIKU, system_prompt=TRIAGE_ROUTER_SYSTEM, max_tokens=1024,
+        product="sitedoc", model=_TRIAGE_MODEL, system_prompt=TRIAGE_ROUTER_SYSTEM, max_tokens=1024,
     ),
     "task_estimator": LayerDefault(
         name="Оценка задач (ТЗ → подзадачи)",
