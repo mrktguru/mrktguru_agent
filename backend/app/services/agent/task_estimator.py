@@ -397,6 +397,23 @@ class TaskEstimator:
         # needs_clarification — return as-is (handled by API layer)
         if data.get("status") == "needs_clarification":
             return data
+
+        # If the estimator emitted typed tracks, flatten their subtasks into the
+        # flat `subtasks` list (kept for backward-compat with executor + UI) while
+        # preserving `tracks` for the typed executor. Each subtask carries its
+        # track_id/type so the executor can pick the right agent per subtask.
+        tracks = data.get("tracks")
+        if tracks and isinstance(tracks, list):
+            flat: list[dict] = []
+            for ti, track in enumerate(tracks):
+                track.setdefault("track_id", f"tr_{ti+1}")
+                for st in track.get("subtasks", []) or []:
+                    st.setdefault("track_id", track["track_id"])
+                    st.setdefault("track_type", track.get("type"))
+                    flat.append(st)
+            if flat and not data.get("subtasks"):
+                data["subtasks"] = flat
+
         # Ensure all subtasks have an id
         for i, st in enumerate(data.get("subtasks", [])):
             if not st.get("id"):

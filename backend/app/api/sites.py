@@ -18,6 +18,7 @@ from app.models.task import Task
 from app.models.task_log import TaskLog
 from app.schemas.site import (
     ClarificationResponse, ClarifyRequest,
+    RejectResponse, ResumeRequest,
     SiteCreate, SitePublic, SiteScanResult,
     TaskCreate, TaskEstimateResponse, TaskPublic, TaskLogPublic,
 )
@@ -238,7 +239,7 @@ async def list_tasks(site_id: str, user: CurrentUser, db: DB) -> list[TaskPublic
 
 
 @router.post("/{site_id}/tasks", status_code=status.HTTP_201_CREATED)
-async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: DB) -> Union[TaskEstimateResponse, ClarificationResponse]:
+async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: DB) -> Union[TaskEstimateResponse, ClarificationResponse, RejectResponse]:
     """Submit a TZ → agent estimates subtasks OR asks clarifying questions."""
     from app.services.agent.task_estimator import TaskEstimator
 
@@ -256,6 +257,24 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
     db.add(task)
     await db.commit()
     await db.refresh(task)
+
+    # ── Stage 0: two-level triage (cheap haiku call) ─────────────────────────
+    from app.services.agent.triage import triage as run_triage
+    tri = run_triage(site, payload.tz_text)
+    task.intent = tri.get("intent")
+    task.task_type = tri.get("type")
+    task.triage = tri  # decision log
+    # Hard reject — out of scope / malicious. No estimation, no edits.
+    if tri.get("intent") == "reject":
+        rej = tri.get("reject") or {}
+        task.status = "rejected"
+        task.error_message = rej.get("message") or "Запрос вне возможностей сервиса."
+        await db.commit()
+        return RejectResponse(
+            task_id=str(task.id),
+            reason=rej.get("reason", "out_of_scope"),
+            message=task.error_message,
+        )
 
     # Try to build a live SSH connection so the estimator can read real files.
     # If SSH is unavailable we fall back gracefully to DB-stored file_structure.
@@ -310,6 +329,7 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
 
     task.title = estimate.get("title", payload.tz_text[:80])
     task.subtasks = estimate.get("subtasks", [])
+    task.tracks = estimate.get("tracks")  # typed tracks (None if estimator didn't emit)
     task.estimated_credits = estimate.get("total_credits", 0)
     task.estimated_minutes = estimate.get("estimated_minutes", 10)
     task.confidence = estimate.get("confidence", "medium")
@@ -322,6 +342,9 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
         total_credits=estimate.get("total_credits", 0),
         confidence=estimate.get("confidence", "medium"),
         estimated_minutes=estimate.get("estimated_minutes", 10),
+        tracks=estimate.get("tracks"),
+        intent=task.intent,
+        type=task.task_type,
     )
 
 

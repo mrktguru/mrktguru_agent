@@ -23,6 +23,7 @@ from app.services.claude.prompts import (
     PHASE_3_SYSTEM,
     PHASE_4_SYSTEM,
     TASK_AUTO_FIX_SYSTEM,
+    TRIAGE_ROUTER_SYSTEM,
 )
 
 
@@ -37,8 +38,15 @@ class LayerDefault:
 
 
 _MODEL = settings.CLAUDE_MODEL
+# Cheap model for fast classification (triage) — saves tokens on a high-frequency call.
+_HAIKU = "claude-3-5-haiku-20241022"
 
 LAYER_DEFAULTS: dict[str, LayerDefault] = {
+    "triage_router": LayerDefault(
+        name="Триаж (классификация запроса)",
+        description="Двухуровневая классификация: намерение (intent) → тип (type). Дешёвая модель.",
+        product="sitedoc", model=_HAIKU, system_prompt=TRIAGE_ROUTER_SYSTEM, max_tokens=1024,
+    ),
     "task_estimator": LayerDefault(
         name="Оценка задач (ТЗ → подзадачи)",
         description="Анализирует ТЗ пользователя и структуру сайта, разбивает на подзадачи с оценкой кредитов.",

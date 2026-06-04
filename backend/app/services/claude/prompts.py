@@ -323,7 +323,30 @@ ESTIMATOR_SYSTEM = dedent("""\
       "total_credits": 10,
       "confidence": "high",
       "estimated_minutes": 15
-    }""")
+    }
+
+    ТИПИЗИРОВАННЫЕ ТРЕКИ (предпочтительно): если запрос составной или требует разных
+    подходов — сгруппируй подзадачи в tracks. Каждый трек: {track_id, intent, type,
+    summary, depends_on[], risk, integration?, subtasks[]}. intent∈action|fix|ops,
+    type из таксономии (tweak|feature|integration|parser|module|content|seo|
+    data_migration|new_bot|new_parser|new_site|bugfix|recover|devops|maintenance|
+    security|deploy). Правила:
+    - type=integration → НЕ заполняй files_to_touch; вместо этого блок
+      integration:{provider, required_secrets[], callback_path, steps[]}, subtasks: [].
+    - type=bugfix → первая подзадача ВСЕГДА воспроизведение и диагноз, правки после причины.
+    - intent=ops и type∈{maintenance,security,data_migration} → первая подзадача — бэкап, risk=high.
+    - Независимые треки → разные track_id, depends_on: []. Зависимые → depends_on на предшественника.
+    Формат с треками:
+    {
+      "title": "...",
+      "tracks": [
+        {"track_id":"tr_1","intent":"action","type":"tweak","summary":"...","depends_on":[],
+         "risk":"low","subtasks":[{"id":"st_1","title":"...","description":"...",
+         "files_to_touch":["..."],"estimated_credits":3,"risk":"low"}]}
+      ],
+      "total_credits": 10, "confidence": "high", "estimated_minutes": 15
+    }
+    Для простых одиночных задач можно вернуть плоский subtasks без tracks (как выше).""")
 
 
 EXECUTOR_SYSTEM = dedent("""\
@@ -583,3 +606,45 @@ def get_mockup_prompt(spec: dict, project_name: str) -> str:
         Return ONLY the HTML.
     """).strip()
 
+
+
+# ── Two-level triage (AGENT_ARCHITECTURE.md §5) ──────────────────────────────
+
+TRIAGE_ROUTER_SYSTEM = dedent("""\
+    Ты классификатор входящих запросов к сервису доработки сайтов.
+    Определи СНАЧАЛА намерение (intent), ПОТОМ конкретный тип (type).
+
+    intent:
+    - action  — сделать/изменить/создать что-то на сайте
+    - fix     — починить сломанное или откатить
+    - info    — узнать/объяснить, БЕЗ изменений
+    - ops     — инфраструктура: сервер, SSL, DNS, обновления, безопасность, деплой
+    - control — ответ на наш вопрос, досыл секретов, «переделайте», «не то»
+    - reject  — вне возможностей сервиса или вредоносное
+
+    type по группам:
+    - action:  tweak | feature | integration | parser | module | content | seo |
+               data_migration | new_bot | new_parser | new_site
+    - fix:     bugfix | recover
+    - info:    investigate | question
+    - ops:     devops | maintenance | security | deploy
+    - control: clarification_response | iteration | feedback
+
+    Правила:
+    - При сомнении между action и fix: если описана ПОЛОМКА («не работает», «сломалось»)
+      → это fix/bugfix, а не tweak.
+    - Если запрос содержит НЕСКОЛЬКО разных работ — поставь "compound": true.
+    - info и reject НЕ идут в кодер-агент.
+
+    Верни СТРОГО один JSON-объект, без markdown:
+    {
+      "intent": "action|fix|info|ops|control|reject",
+      "type": "<конкретный тип или null для control/reject>",
+      "compound": false,
+      "confidence": "high|medium|low",
+      "reasoning": "одна фраза почему",
+      "reject": {"reason": "...", "message": "понятная клиенту формулировка"},
+      "info": {"question": "переформулированный вопрос"}
+    }
+    Поля reject/info заполняй ТОЛЬКО для соответствующего intent, иначе опусти.
+""").strip()
