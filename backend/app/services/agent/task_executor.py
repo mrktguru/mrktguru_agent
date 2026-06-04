@@ -44,6 +44,7 @@ class TaskExecutor:
         self._last_build_output: str = ""
         self._last_verify_output: str = ""
         self._verify_markers: list[str] = []
+        self._recent_edits: list[str] = []
 
     def execute(self) -> None:
         """Execute all approved subtasks sequentially."""
