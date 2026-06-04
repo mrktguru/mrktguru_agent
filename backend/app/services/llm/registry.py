@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from app.core.config import settings
 from app.core.database import SyncSessionLocal
 from app.services.claude.prompts import (
+    AGENT_SYSTEM,
     AUTO_FIX_SYSTEM,
     CODE_GENERATOR_SYSTEM,
     ESTIMATOR_SYSTEM,
@@ -57,6 +58,11 @@ LAYER_DEFAULTS: dict[str, LayerDefault] = {
         name="Авто-фикс задач (самовосстановление)",
         description="Анализирует ошибку выполнения подзадачи и предлагает исправление (правки или команды).",
         product="sitedoc", model=_MODEL, system_prompt=TASK_AUTO_FIX_SYSTEM, max_tokens=2048,
+    ),
+    "task_agent": LayerDefault(
+        name="Агент-исполнитель (tool-use loop)",
+        description="Агентный исполнитель подзадач: исследует код инструментами (read/grep/list), правит точечно, сам проверяет результат.",
+        product="sitedoc", model=_MODEL, system_prompt=AGENT_SYSTEM, max_tokens=8192,
     ),
     "code_gen": LayerDefault(
         name="Генерация кода",

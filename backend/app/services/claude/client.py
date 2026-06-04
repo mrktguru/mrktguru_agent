@@ -51,6 +51,35 @@ class ClaudeClient:
             },
         }
 
+    def run_agent(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        max_tokens: int = 8192,
+        thinking_tokens: int = 0,
+    ):
+        """One turn of an agentic tool-use loop.
+
+        Returns the raw Anthropic response so the caller can inspect stop_reason
+        and tool_use content blocks, then append a tool_result turn and call again.
+        With extended thinking enabled, max_tokens must exceed the thinking budget.
+        """
+        if thinking_tokens and max_tokens <= thinking_tokens:
+            max_tokens = thinking_tokens + 4096
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "system": [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": messages,
+            "tools": tools,
+        }
+        if thinking_tokens and thinking_tokens > 0:
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_tokens}
+        return self.client.messages.create(**kwargs)
+
     def call_phase(
         self,
         phase: int,

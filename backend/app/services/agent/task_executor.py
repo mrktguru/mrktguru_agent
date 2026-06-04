@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import uuid
 from typing import Callable
 
@@ -56,13 +57,15 @@ class TaskExecutor:
             self._log(f"━━━ Задача {idx+1}/{len(enabled)}: {subtask['title']} ━━━", "running", idx)
             try:
                 files = self._execute_subtask(idx, subtask)
+                # Persist originals as a tar so manual rollback works later
+                self._backup.finalize_subtask_backup(str(self._task.id), idx)
                 changed_files.extend(files)
                 self._log(f"✓ Готово", "success", idx)
             except Exception as exc:
                 self._log(f"✗ Ошибка: {exc}", "error", idx)
                 self._log(f"↩ Откатываю изменения подзадачи {idx+1}...", "running", idx)
                 try:
-                    self._backup.restore(str(self._task.id), idx, self._site.site_root_path or "")
+                    self._backup.restore_live(str(self._task.id), idx)
                     self._log(f"↩ Откат выполнен", "rollback", idx)
                 except Exception as re_exc:
                     self._log(f"⚠ Откат не удался: {re_exc}", "error", idx)
@@ -78,27 +81,292 @@ class TaskExecutor:
         self._db.commit()
 
     def _execute_subtask(self, idx: int, subtask: dict) -> list[str]:
-        files_to_touch = subtask.get("files_to_touch", [])
+        """Run a subtask as an autonomous agent: investigate the code with tools,
+        make targeted edits, then self-verify — instead of one blind JSON plan."""
+        self._recent_edits = []
+        self._verify_markers = []
+        self._log("🔍 Изучаю проект инструментами...", "running", idx)
+        return self._run_agentic_subtask(idx, subtask)
 
-        # Step 1: Backup
-        self._log("💾 Создаю бэкап...", "running", idx)
-        backup_path = self._backup.backup_files(str(self._task.id), idx, files_to_touch)
-        if backup_path:
-            self._log(f"✅ Бэкап: {backup_path}", "success", idx)
+    # ── Agentic tool-use loop ─────────────────────────────────────────────────
 
-        # Step 2: Read files (design system first so Claude gets full context)
-        self._log("📂 Читаю файлы...", "running", idx)
-        design_files = self._design_system_files()
-        file_contents = self._read_files(design_files + files_to_touch)
+    _AGENT_MAX_STEPS = 30
+    _AGENT_MAX_VERIFY_ROUNDS = 3
+    _AGENT_THINKING_TOKENS = 4000
 
-        # Step 3: Ask Claude for change plan
-        self._log("🤖 Анализирую задачу...", "running", idx)
-        plan = self._plan_changes(subtask, file_contents)
+    def _agent_tools(self) -> list[dict]:
+        return [
+            {
+                "name": "read_file",
+                "description": "Прочитать полное содержимое файла по абсолютному пути.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "Абсолютный путь к файлу"}},
+                    "required": ["path"],
+                },
+            },
+            {
+                "name": "grep",
+                "description": "Искать строку/паттерн по коду проекта. Возвращает file:line: совпадения.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Что искать (строка или regex)"},
+                        "path": {"type": "string", "description": "Опц. поддиректория; по умолчанию корень проекта"},
+                    },
+                    "required": ["pattern"],
+                },
+            },
+            {
+                "name": "list_dir",
+                "description": "Показать содержимое директории.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+            {
+                "name": "edit_file",
+                "description": (
+                    "Внести правку в файл. action=replace требует уникальный find из текущего файла; "
+                    "append добавляет в конец; create создаёт новый файл."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "action": {"type": "string", "enum": ["replace", "append", "create"]},
+                        "find": {"type": "string", "description": "Точный уникальный фрагмент (только для replace)"},
+                        "content": {"type": "string", "description": "Новый/добавляемый контент или замена"},
+                    },
+                    "required": ["path", "action", "content"],
+                },
+            },
+            {
+                "name": "run_command",
+                "description": (
+                    "Выполнить shell-команду на сервере по SSH (как root). Для диагностики, "
+                    "пересборки, перезапуска сервисов (docker compose restart, npm run build, "
+                    "nginx -s reload). Возвращает exit-код и вывод."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            },
+            {
+                "name": "finish",
+                "description": (
+                    "Вызвать когда все правки внесены. Система пересоберёт проект и проверит сайт; "
+                    "если проверка не пройдёт — вернётся ошибка для исправления."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string", "description": "Что сделано"},
+                        "verify_url": {"type": "string", "description": "Опц. URL страницы где виден результат"},
+                        "expected_markers": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Опц. фрагменты, которые точно появятся в HTML",
+                        },
+                    },
+                    "required": ["summary"],
+                },
+            },
+        ]
 
-        # Steps 4-7: apply → post-commands → rebuild → verify, with self-healing
-        # retries (the agent analyzes failures and tries to fix them before the
-        # subtask is rolled back by execute()).
-        return self._apply_verify_with_healing(idx, subtask, plan, files_to_touch)
+    def _run_agentic_subtask(self, idx: int, subtask: dict) -> list[str]:
+        layer = resolve("task_agent")
+        client = ClaudeClient(model=layer.model)
+        tools = self._agent_tools()
+        system = layer.system_prompt
+        messages: list[dict] = [
+            {"role": "user", "content": self._build_agent_initial(subtask)}
+        ]
+        verify_rounds = 0
+
+        for _step in range(self._AGENT_MAX_STEPS):
+            try:
+                resp = client.run_agent(
+                    system, messages, tools,
+                    max_tokens=layer.max_tokens,
+                    thinking_tokens=self._AGENT_THINKING_TOKENS,
+                )
+            except Exception:
+                # Some models reject thinking+tools — retry once without thinking.
+                resp = client.run_agent(
+                    system, messages, tools, max_tokens=layer.max_tokens, thinking_tokens=0
+                )
+
+            messages.append({"role": "assistant", "content": resp.content})
+
+            # Surface the agent's visible reasoning/narration to the live log
+            for block in resp.content:
+                if getattr(block, "type", "") == "text" and block.text.strip():
+                    self._log("  💭 " + block.text.strip()[:240], "running", idx)
+
+            tool_uses = [b for b in resp.content if getattr(b, "type", "") == "tool_use"]
+            if not tool_uses:
+                break  # agent stopped without more actions
+
+            tool_results: list[dict] = []
+            finished_ok = False
+            for tu in tool_uses:
+                if tu.name == "finish":
+                    self._verify_markers = (tu.input or {}).get("expected_markers") or []
+                    verify_url = (tu.input or {}).get("verify_url")
+                    summary = (tu.input or {}).get("summary", "")
+                    if summary:
+                        self._log("  📝 " + summary[:240], "running", idx)
+                    try:
+                        self.rebuild_and_verify(idx, verify_url=verify_url)
+                        tool_results.append({
+                            "type": "tool_result", "tool_use_id": tu.id,
+                            "content": "OK — пересборка и проверка сайта прошли успешно.",
+                        })
+                        finished_ok = True
+                    except Exception as e:
+                        verify_rounds += 1
+                        if verify_rounds > self._AGENT_MAX_VERIFY_ROUNDS:
+                            raise
+                        tool_results.append({
+                            "type": "tool_result", "tool_use_id": tu.id,
+                            "content": (
+                                f"Проверка НЕ прошла: {str(e)[:600]}. "
+                                "Найди причину (read_file/grep), исправь и снова вызови finish."
+                            ),
+                        })
+                else:
+                    out = self._dispatch_tool(tu.name, tu.input or {}, idx, subtask)
+                    tool_results.append({
+                        "type": "tool_result", "tool_use_id": tu.id, "content": out[:8000],
+                    })
+
+            messages.append({"role": "user", "content": tool_results})
+            if finished_ok:
+                return list(dict.fromkeys(self._recent_edits))
+
+        # Step budget exhausted — apply whatever was edited, best-effort verify
+        if self._recent_edits:
+            try:
+                self.rebuild_and_verify(idx, verify_url=None)
+            except Exception:
+                pass
+            return list(dict.fromkeys(self._recent_edits))
+        raise RuntimeError("Агент не завершил задачу за отведённое число шагов")
+
+    def _dispatch_tool(self, name: str, inp: dict, idx: int, subtask: dict) -> str:
+        root = self._source_root()
+        if name == "read_file":
+            path = inp.get("path", "")
+            _, out, _ = self._ssh.run(f"cat {shlex.quote(path)} 2>/dev/null | head -c 60000", timeout=20)
+            self._log(f"  📖 read {path}", "running", idx)
+            return out if out.strip() else f"(файл пуст или не найден: {path})"
+        if name == "grep":
+            pattern = inp.get("pattern", "")
+            sub = inp.get("path") or root
+            self._log(f"  🔎 grep '{pattern[:48]}'", "running", idx)
+            _, out, _ = self._ssh.run(
+                f"grep -rnI --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build "
+                f"--exclude-dir=.next --exclude-dir=.git -e {shlex.quote(pattern)} {shlex.quote(sub)} "
+                f"2>/dev/null | head -80",
+                timeout=30,
+            )
+            return out if out.strip() else f"(совпадений не найдено: {pattern})"
+        if name == "list_dir":
+            path = inp.get("path") or root
+            _, out, _ = self._ssh.run(f"ls -la {shlex.quote(path)} 2>/dev/null | head -100", timeout=15)
+            return out if out.strip() else f"(директория пуста или не найдена: {path})"
+        if name == "edit_file":
+            return self._agent_edit(inp, idx, subtask)
+        if name == "run_command":
+            cmd = inp.get("command", "")
+            self._log(f"  ⚙ $ {cmd[:80]}", "running", idx)
+            rc, out, err = self._ssh.run(cmd, timeout=300)
+            body = (out or "")
+            if err and err.strip():
+                body += f"\n[stderr] {err.strip()}"
+            return (f"exit={rc}\n{body}").strip()[:8000] or f"exit={rc} (нет вывода)"
+        return f"(неизвестный инструмент: {name})"
+
+    def _agent_edit(self, inp: dict, idx: int, subtask: dict) -> str:
+        path = inp.get("path", "")
+        action = inp.get("action", "replace")
+        content = inp.get("content", "")
+        find = inp.get("find", "") or ""
+        change = {"file": path, "action": action, "content": content, "find": find}
+        subtask_text = f"{subtask.get('title', '')} {subtask.get('description', '')}"
+
+        try:
+            self._impact_guard(change, subtask_text)
+        except Exception as e:
+            return f"ОТКЛОНЕНО guard'ом: {e}"
+
+        # Preserve the original before the first edit (enables rollback)
+        try:
+            self._backup.snapshot_original(str(self._task.id), idx, path)
+        except Exception:
+            pass
+
+        try:
+            self._apply_change(path, action, content, find)
+        except Exception as e:
+            return (
+                f"ОШИБКА правки {path}: {e}. "
+                "Если replace — прочитай файл заново и убедись, что find точный и уникальный."
+            )
+
+        self._record_diff(path, action, content, find)
+        if path not in self._recent_edits:
+            self._recent_edits.append(path)
+        self._log(f"  ✏ {action}: {path}", "running", idx)
+        return f"OK — {action} применён к {path}"
+
+    def _source_root(self) -> str:
+        """Resolve the real source root (parent of dist/build/.next if needed)."""
+        root = (self._site.site_root_path or "").rstrip("/")
+        if not root:
+            return "/"
+        last = root.split("/")[-1]
+        if last in ("dist", "build", ".next", "out", "public"):
+            parent = root.rsplit("/", 1)[0]
+            _, out, _ = self._ssh.run(
+                f"[ -f {shlex.quote(parent + '/package.json')} ] && echo yes || echo no", timeout=8
+            )
+            if out.strip() == "yes":
+                return parent
+        return root
+
+    def _build_agent_initial(self, subtask: dict) -> str:
+        s = self._site
+        root = self._source_root()
+        parts = [f"САЙТ: {s.name}"]
+        if s.url:
+            parts.append(f"URL: {s.url}")
+        if s.cms:
+            parts.append(f"CMS/стек: {s.cms} {s.cms_version or ''}".strip())
+        if s.framework:
+            parts.append(f"Фреймворк: {s.framework}")
+        if s.is_docker is not None:
+            parts.append(f"Docker: {'да' if s.is_docker else 'нет'}")
+        parts.append(f"Корень исходников проекта: {root}")
+        if s.site_root_path and s.site_root_path != root:
+            parts.append(f"(веб-сервер отдаёт собранную версию из: {s.site_root_path})")
+
+        entries = (s.file_structure or {}).get("entries", [])
+        src = [e for e in entries if not any(x in e for x in ("/dist/", "/build/", "/.next/", "/node_modules/"))][:120]
+        if src:
+            parts.append("Файлы проекта (фрагмент дерева):\n" + "\n".join(src))
+
+        parts.append(
+            f"\nЗАДАЧА: {subtask.get('title', '')}\n{subtask.get('description', '')}\n\n"
+            f"Изучи код инструментами (grep/read_file/list_dir) от корня {root}, найди настоящий "
+            "источник проблемы, внеси точечные правки в ИСХОДНЫЕ файлы и вызови finish."
+        )
+        return "\n".join(parts)
 
     def _apply_verify_with_healing(
         self, idx: int, subtask: dict, plan: dict, files_to_touch: list[str]
@@ -266,7 +534,7 @@ class TaskExecutor:
         # (the scanner only sets needs_rebuild=True for Docker-based frontends).
         if not needs_rebuild and not is_docker:
             _FRONTEND_EXTS = {"ts", "tsx", "js", "jsx", "vue", "css", "scss", "svelte"}
-            changed = self._task.changed_files or []
+            changed = (self._task.changed_files or []) + getattr(self, "_recent_edits", [])
             if any(p.rsplit(".", 1)[-1] in _FRONTEND_EXTS for p in changed if "." in p):
                 needs_rebuild = True
 
