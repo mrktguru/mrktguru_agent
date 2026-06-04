@@ -117,7 +117,7 @@ class TaskExecutor:
             try:
                 self._log(f"⚙ Применяю: {current_plan.get('plan', '')}", "running", idx)
                 self._verify_markers = current_plan.get("expected_markers") or []
-                applied = self._apply_plan(idx, current_plan)
+                applied = self._apply_plan(idx, current_plan, subtask)
                 self._run_post_commands(idx, current_plan)
                 self.rebuild_and_verify(idx, verify_url=current_plan.get("verify_url"))
                 if attempt > 0:
@@ -164,8 +164,49 @@ class TaskExecutor:
                     }
                 self._log("🔁 Повторяю с исправлением...", "running", idx)
 
-    def _apply_plan(self, idx: int, plan: dict) -> list[str]:
+    # ── Impact guard — block CSS "sledgehammer" edits ─────────────────────────
+    # A bare element/universal selector combined with !important or a reset value
+    # (revert/unset/initial) nukes intentional styling site-wide. This is the
+    # exact pattern that turned every button grey. Stack-agnostic — any CSS.
+    _GLOBAL_SELECTOR_RE = re.compile(
+        r'(?m)^\s*(\*|a|button|input|select|textarea|label|ul|ol|li|p|span|div|img'
+        r'|h[1-6]|nav|header|footer|section|table|td|th|tr)\b[^{]*\{'
+    )
+    _RESET_VALUE_RE = re.compile(r'!important|\b(revert|unset|initial)\b')
+    _GLOBAL_INTENT_RE = re.compile(
+        r'глобальн|везде|все\s|всех|всём|всем|всё|сброс|reset|\ball\b|every|site-?wide|globally',
+        re.IGNORECASE,
+    )
+
+    def _impact_guard(self, change: dict, subtask_text: str) -> None:
+        """Refuse a change that introduces a global CSS reset rule the task didn't ask for.
+
+        Raises RuntimeError (caught by the self-healing loop) so the agent is forced
+        to narrow the change to specific elements instead of a site-wide sledgehammer.
+        """
+        filepath = change.get("file", "") or ""
+        content = change.get("content", "") or ""
+        is_stylesheet = filepath.endswith((".css", ".scss", ".sass", ".less")) or "<style" in content
+        if not is_stylesheet:
+            return  # JSX/template scope is handled by the prompt method, not this guard
+        if not (self._GLOBAL_SELECTOR_RE.search(content) and self._RESET_VALUE_RE.search(content)):
+            return  # not a sledgehammer
+        intent = f"{subtask_text} {self._task.tz_text or ''}".lower()
+        if self._GLOBAL_INTENT_RE.search(intent):
+            return  # user explicitly asked for a global change — allow it
+        raise RuntimeError(
+            "Глобальное CSS-правило с !important/reset на element-селекторе затрагивает "
+            "ВСЕ такие элементы сайта (например все <button>/<a>) и уничтожит намеренные "
+            "стили. Пользователь не просил менять ВСЕ элементы. Найди конкретные элементы "
+            "нужной роли и правь точечно — в их className или узком селекторе (.card a, "
+            ".nav-link), без глобального правила и без !important."
+        )
+
+    def _apply_plan(self, idx: int, plan: dict, subtask: dict | None = None) -> list[str]:
         """Apply every change in a plan; returns the list of touched file paths."""
+        subtask_text = ""
+        if subtask:
+            subtask_text = f"{subtask.get('title', '')} {subtask.get('description', '')}"
         applied_files: list[str] = []
         for change in plan.get("changes", []):
             filepath = change.get("file", "")
@@ -173,6 +214,7 @@ class TaskExecutor:
             content = change.get("content", "")
             find = change.get("find", "")
 
+            self._impact_guard(change, subtask_text)
             self._log(f"  → {action}: {filepath}", "running", idx)
             self._apply_change(filepath, action, content, find)
             self._record_diff(filepath, action, content, find)
