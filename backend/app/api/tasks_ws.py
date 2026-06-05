@@ -14,7 +14,23 @@ from app.models.task_log import TaskLog
 
 ws_router = APIRouter()
 
-TERMINAL = {"done", "failed", "rolled_back"}
+TERMINAL = {"done", "failed", "rolled_back", "answered", "rejected"}
+# Non-terminal stop: task suspended waiting for the user to provide input.
+PAUSED = "waiting_for_user"
+
+
+def _stop_event(task) -> dict:
+    """Build the WS event that ends a streaming session for a stopped task."""
+    if task.status == PAUSED:
+        return {
+            "type": "task_paused",
+            "status": PAUSED,
+            "pending_input": task.pending_input or {},
+        }
+    ev = {"type": "task_complete", "status": task.status}
+    if task.status == "answered":
+        ev["answer"] = task.answer_text
+    return ev
 
 
 @ws_router.websocket("/ws/tasks/{task_id}")
@@ -47,11 +63,11 @@ async def task_logs_ws(websocket: WebSocket, task_id: str, token: str | None = N
                 await websocket.send_json(_serialize(row))
                 last_seen_at = row.created_at
 
-            terminal_status = task.status
+            stop_task = task if (task.status in TERMINAL or task.status == PAUSED) else None
 
-        # If task already finished before WS connected → send complete immediately
-        if terminal_status in TERMINAL:
-            await websocket.send_json({"type": "task_complete", "status": terminal_status})
+        # If task already stopped before WS connected → send the stop event immediately
+        if stop_task is not None:
+            await websocket.send_json(_stop_event(stop_task))
             return
 
         # ── 2. Poll for new logs until terminal state ─────────────────────────
@@ -73,10 +89,11 @@ async def task_logs_ws(websocket: WebSocket, task_id: str, token: str | None = N
 
                 # Check task status
                 refreshed = await db.get(Task, task_id)
-                terminal_status = refreshed.status if refreshed else "failed"
+                status_now = refreshed.status if refreshed else "failed"
+                stop_task = refreshed if (status_now in TERMINAL or status_now == PAUSED) else None
 
-            if terminal_status in TERMINAL:
-                await websocket.send_json({"type": "task_complete", "status": terminal_status})
+            if stop_task is not None:
+                await websocket.send_json(_stop_event(stop_task))
                 break
 
     except WebSocketDisconnect:

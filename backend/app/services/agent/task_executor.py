@@ -65,6 +65,7 @@ class TaskExecutor:
         self._last_verify_output: str = ""
         self._verify_markers: list[str] = []
         self._recent_edits: list[str] = []
+        self._tokens_used: int = 0  # accumulated across the whole task (→ actual_credits)
 
     def execute(self) -> None:
         """Execute all approved subtasks sequentially.
@@ -137,6 +138,7 @@ class TaskExecutor:
         self._task.changed_files = list(set(changed_files))
         self._task.file_diffs = self._file_diffs or None
         self._task.status = "done"
+        self._task.actual_credits = round(self._tokens_used / 1000, 1)  # ≈1000 токенов = 1 кредит
         self._task.backup_available = self._backup.has_backups(str(self._task.id))
         self._db.commit()
 
@@ -157,6 +159,25 @@ class TaskExecutor:
     _AGENT_MAX_STEPS = 30
     _AGENT_MAX_VERIFY_ROUNDS = 3
     _AGENT_THINKING_TOKENS = 4000
+    _AGENT_TOKEN_BUDGET = 500_000   # per-task cap; stops a runaway loop
+    _COMPACT_AFTER_MSGS = 26        # compact old tool_result bodies past this
+
+    @staticmethod
+    def _compact_history(messages: list[dict], keep_last: int = 8) -> None:
+        """Shrink old tool_result bodies to stubs to stay within context on long loops.
+        Keeps the initial message and the last `keep_last` turns intact; only truncates
+        the text of older tool_results (ids preserved → thread stays valid)."""
+        if len(messages) <= keep_last + 1:
+            return
+        for m in messages[1:-keep_last]:
+            content = m.get("content")
+            if not isinstance(content, list):
+                continue
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    c = b.get("content")
+                    if isinstance(c, str) and len(c) > 200:
+                        b["content"] = c[:160] + f" …[свёрнуто {len(c)} симв]"
 
     def _agent_tools(self) -> list[dict]:
         return [
@@ -336,6 +357,17 @@ class TaskExecutor:
             verify_rounds = 0
 
         for _step in range(self._AGENT_MAX_STEPS):
+            # Token budget guard — stop a runaway loop before it burns credits
+            if self._tokens_used > self._AGENT_TOKEN_BUDGET:
+                self._log(
+                    f"⚠ Достигнут лимит токенов ({self._tokens_used}), завершаю что есть",
+                    "running", idx,
+                )
+                break
+            # Compact old tool_result bodies on long loops to stay within context
+            if len(messages) > self._COMPACT_AFTER_MSGS:
+                self._compact_history(messages)
+
             try:
                 resp = client.run_agent(
                     system, messages, tools,
@@ -344,6 +376,12 @@ class TaskExecutor:
             except Exception:
                 resp = client.run_agent(
                     system, messages, tools, max_tokens=layer.max_tokens, thinking_tokens=0
+                )
+
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                self._tokens_used += (getattr(usage, "input_tokens", 0) or 0) + (
+                    getattr(usage, "output_tokens", 0) or 0
                 )
 
             messages.append({"role": "assistant", "content": resp.content})
@@ -785,6 +823,41 @@ class TaskExecutor:
                 raise RuntimeError(self._last_verify_output)
 
         self._log("✅ Контент в порядке", "success", subtask_index)
+
+        # 4. Headless render check (live DOM + console errors + screenshot).
+        #    Only for frontend UI changes; gracefully skipped if playwright absent.
+        self._headless_verify(url, subtask_index)
+
+    def _headless_verify(self, url: str, subtask_index: int | None) -> None:
+        is_frontend = bool(getattr(self._site, "needs_rebuild", False)) or bool(
+            getattr(self._site, "framework", None)
+        )
+        if not is_frontend:
+            return
+        try:
+            from app.services.verify.headless import headless_check, headless_available
+        except Exception:
+            return
+        if not headless_available():
+            return
+        self._log("🌐 Проверяю в браузере (headless)...", "running", subtask_index)
+        res = headless_check(url, expected_markers=self._verify_markers or [])
+        if res.get("screenshot_b64"):
+            self._task.screenshot_after = res["screenshot_b64"]
+        if res.get("error"):
+            self._log(f"  ⚠ headless: {res['error'][:120]}", "running", subtask_index)
+            return  # harness issue → don't fail the task
+        if not res.get("ok"):
+            errs = "; ".join(res.get("console_errors", [])[:3])
+            miss = ", ".join(res.get("missing_markers", []))
+            detail = []
+            if errs:
+                detail.append(f"console errors: {errs}")
+            if miss:
+                detail.append(f"нет маркеров: {miss}")
+            self._last_verify_output = "Headless: " + " | ".join(detail)
+            raise RuntimeError(self._last_verify_output)
+        self._log("✅ Браузер: DOM ок, console-ошибок нет", "success", subtask_index)
 
     @staticmethod
     def _same_host(url_a: str, url_b: str) -> bool:

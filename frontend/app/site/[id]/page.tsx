@@ -25,10 +25,22 @@ type Subtask = {
   risk: "low" | "medium" | "high"; enabled: boolean;
 };
 
+type Track = {
+  track_id: string; intent: string; type: string; summary: string;
+  depends_on: string[]; risk: string;
+  integration?: { provider: string; required_secrets: string[]; callback_path?: string; steps: string[] } | null;
+  subtasks: Subtask[];
+};
+
 type TaskEstimate = {
   task_id: string; subtasks: Subtask[];
   total_credits: number; confidence: string; estimated_minutes: number;
+  tracks?: Track[] | null; intent?: string | null; type?: string | null;
 };
+
+type PendingInput = { message: string; required_fields: string[]; track_id?: string | null };
+
+type RejectResp = { task_id: string; status: "rejected"; reason: string; message: string };
 
 type Clarification = {
   task_id: string; status: "needs_clarification";
@@ -45,6 +57,8 @@ type Task = {
   changed_files: string[] | null; error_message: string | null;
   file_diffs: Record<string, FileDiff> | null;
   backup_available: boolean; created_at: string;
+  intent?: string | null; type?: string | null;
+  tracks?: Track[] | null; pending_input?: PendingInput | null; answer_text?: string | null;
 };
 
 type LogLine = {
@@ -60,8 +74,11 @@ type MsgEstimate = { kind: "estimate"; data: TaskEstimate; subtasks: Subtask[] }
 type MsgRunning = { kind: "running"; taskId: string; backupAvailable?: boolean; isRollback?: boolean };
 type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null };
 type MsgError = { kind: "error"; text: string };
+type MsgInputRequest = { kind: "input_request"; taskId: string; data: PendingInput };
+type MsgAnswered = { kind: "answered"; taskId: string; answer: string };
+type MsgRejected = { kind: "rejected"; text: string };
 
-type ChatMsg = MsgUser | MsgAnalyzing | MsgClarify | MsgEstimate | MsgRunning | MsgDone | MsgError;
+type ChatMsg = MsgUser | MsgAnalyzing | MsgClarify | MsgEstimate | MsgRunning | MsgDone | MsgError | MsgInputRequest | MsgAnswered | MsgRejected;
 
 type Tab = "tasks" | "audit" | "history";
 const RISK = { low: "bg-emerald-50 text-emerald-700 border-emerald-100", medium: "bg-amber-50 text-amber-700 border-amber-100", high: "bg-red-50 text-red-700 border-red-100" };
@@ -451,6 +468,9 @@ export default function SitePage() {
   const [attachments, setAttachments] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [pendingClarify, setPendingClarify] = useState<PendingClarify>(null);
+  // Task paused at request_user_input → render a form to collect required fields
+  const [pendingInput, setPendingInput] = useState<{ taskId: string; data: PendingInput } | null>(null);
+  const [inputFields, setInputFields] = useState<Record<string, string>>({});
 
   // Live log state per running task
   const [runningLogs, setRunningLogs] = useState<Record<string, LogLine[]>>({});
@@ -505,6 +525,10 @@ export default function SitePage() {
       const lastClarifying = [...recent].reverse().find(t => t.status === "clarifying");
       if (lastClarifying) setPendingClarify({ taskId: lastClarifying.id });
 
+      // Bind the resume form to the most recent task paused for user input
+      const lastWaiting = [...recent].reverse().find(t => t.status === "waiting_for_user");
+      if (lastWaiting?.pending_input) setPendingInput({ taskId: lastWaiting.id, data: lastWaiting.pending_input });
+
       // Reconnect live streams for tasks still in progress
       recent.filter(t => RUNNING_STATUSES.has(t.status)).forEach(t => {
         setRunningLogs(p => ({ ...p, [t.id]: [] }));
@@ -544,6 +568,7 @@ export default function SitePage() {
               total_credits: t.estimated_credits || 0,
               confidence: t.confidence || "medium",
               estimated_minutes: t.estimated_minutes || 10,
+              tracks: t.tracks || null, intent: t.intent || null, type: t.type || null,
             },
             subtasks: (t.subtasks || []).map(s => ({ ...s, enabled: s.enabled !== false })),
           });
@@ -559,6 +584,15 @@ export default function SitePage() {
           break;
         case "rolled_back":
           out.push({ kind: "done", status: "rolled_back", taskId: t.id, logs: null, backupAvailable: false });
+          break;
+        case "waiting_for_user":
+          if (t.pending_input) out.push({ kind: "input_request", taskId: t.id, data: t.pending_input });
+          break;
+        case "answered":
+          out.push({ kind: "answered", taskId: t.id, answer: t.answer_text || "" });
+          break;
+        case "rejected":
+          out.push({ kind: "rejected", text: t.error_message || "Запрос вне возможностей сервиса." });
           break;
       }
     }
@@ -623,12 +657,15 @@ export default function SitePage() {
     setBusy(true);
 
     try {
-      const { data } = await api.post<TaskEstimate | Clarification>(`/api/sites/${id}/tasks`, {
+      const { data } = await api.post<TaskEstimate | Clarification | RejectResp>(`/api/sites/${id}/tasks`, {
         tz_text: text,
         reference_urls: refUrl ? [refUrl] : undefined,
         attachments: attachments.length ? attachments : undefined,
       });
-      if ((data as Clarification).status === "needs_clarification") {
+      if ((data as RejectResp).status === "rejected") {
+        replaceLast({ kind: "rejected", text: (data as RejectResp).message });
+        setPendingClarify(null);
+      } else if ((data as Clarification).status === "needs_clarification") {
         const cl = data as Clarification;
         replaceLast({ kind: "clarify", data: cl });
         setPendingClarify({ taskId: cl.task_id });
@@ -642,6 +679,29 @@ export default function SitePage() {
       replaceLast({ kind: "error", text: err?.response?.data?.detail || "Ошибка анализа" });
       setPendingClarify(null);
     } finally { setBusy(false); inputRef.current?.focus(); }
+  }
+
+  /* ── Resume a paused task (provide secrets / confirmation) ─────────────────── */
+  async function handleResume() {
+    if (!pendingInput || busy) return;
+    const { taskId, data } = pendingInput;
+    const provided: Record<string, string> = {};
+    for (const f of data.required_fields) provided[f] = inputFields[f] || "";
+    push({ kind: "user", text: "✓ Данные предоставлены: " + data.required_fields.join(", ") });
+    setBusy(true);
+    try {
+      await api.post(`/api/sites/${id}/tasks/${taskId}/resume`, { provided_fields: provided });
+      // Swap the input-request bubble back into a live running stream
+      setMessages(prev => prev.map(m =>
+        m.kind === "input_request" && m.taskId === taskId ? { kind: "running", taskId } : m
+      ));
+      setRunningLogs(p => ({ ...p, [taskId]: [] }));
+      setPendingInput(null);
+      setInputFields({});
+      startWs(taskId);
+    } catch (err: any) {
+      replaceLast({ kind: "error", text: err?.response?.data?.detail || "Не удалось возобновить" });
+    } finally { setBusy(false); }
   }
 
   /* ── Toggle subtask ─────────────────────────────────────────────────────── */
@@ -709,6 +769,20 @@ export default function SitePage() {
         api.get<Task[]>(`/api/sites/${id}/tasks`)
           .then(({ data }) => setAllTasks(data))
           .catch(() => {});
+      } else if (msg.type === "task_paused") {
+        // Task suspended at request_user_input → swap the running bubble for an input form
+        const data: PendingInput = msg.pending_input || { message: "", required_fields: [] };
+        setMessages(prev => prev.map(m =>
+          m.kind === "running" && m.taskId === taskId
+            ? { kind: "input_request", taskId, data }
+            : m
+        ));
+        setPendingInput({ taskId, data });
+        setInputFields({});
+        setBusy(false);
+        ws.close();
+        delete wsRef.current[taskId];
+        api.get<Task[]>(`/api/sites/${id}/tasks`).then(({ data }) => setAllTasks(data)).catch(() => {});
       }
     };
     ws.onerror = () => {
@@ -902,6 +976,38 @@ export default function SitePage() {
                     />
                   )}
 
+                  {/* Rejected request */}
+                  {msg.kind === "rejected" && (
+                    <div className="flex gap-3 items-start">
+                      <AgentAvatar />
+                      <div className="bg-amber-50 border border-amber-200 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-amber-800">
+                        <span className="font-medium">Не могу взять задачу.</span> {msg.text}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Answered (info question, no edits) */}
+                  {msg.kind === "answered" && (
+                    <div className="flex gap-3 items-start">
+                      <AgentAvatar />
+                      <div className="bg-surface border border-border rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-text-main whitespace-pre-wrap">
+                        {msg.answer || "—"}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Paused — waiting for user input (secrets / confirmation) */}
+                  {msg.kind === "input_request" && (
+                    <InputRequestMsg
+                      data={msg.data}
+                      active={pendingInput?.taskId === msg.taskId}
+                      values={inputFields}
+                      onChange={(k, v) => setInputFields(p => ({ ...p, [k]: v }))}
+                      onSubmit={handleResume}
+                      busy={busy}
+                    />
+                  )}
+
                   {/* Estimate */}
                   {msg.kind === "estimate" && (
                     <EstimateMsg
@@ -1065,6 +1171,47 @@ function ClarifyMsg({ data, pending }: {
   );
 }
 
+/* ─── Input request (pause for secrets / confirmation) ───────────────────────── */
+function InputRequestMsg({ data, active, values, onChange, onSubmit, busy }: {
+  data: PendingInput; active: boolean;
+  values: Record<string, string>; onChange: (k: string, v: string) => void;
+  onSubmit: () => void; busy: boolean;
+}) {
+  const isSecret = (f: string) => /secret|token|key|password|pass/i.test(f);
+  const allFilled = data.required_fields.every(f => (values[f] || "").trim().length > 0);
+  return (
+    <AgentBubble label="SiteDoc AI — нужны данные">
+      <p className="text-sm text-text-main whitespace-pre-wrap mb-3">{data.message}</p>
+      {active ? (
+        <div className="space-y-2">
+          {data.required_fields.map(f => (
+            <div key={f}>
+              <label className="block text-xs font-medium text-text-sub mb-1">{f}</label>
+              <input
+                type={isSecret(f) ? "password" : "text"}
+                value={values[f] || ""}
+                onChange={(e) => onChange(f, e.target.value)}
+                autoComplete="off"
+                className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-surface focus:border-accent transition-colors"
+                placeholder={f}
+              />
+            </div>
+          ))}
+          <button
+            onClick={onSubmit}
+            disabled={busy || !allFilled}
+            className="mt-1 bg-accent text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-40"
+          >
+            {busy ? "Отправляю..." : "Отправить и продолжить"}
+          </button>
+        </div>
+      ) : (
+        <p className="text-xs text-text-muted">Данные предоставлены, продолжаю…</p>
+      )}
+    </AgentBubble>
+  );
+}
+
 /* ─── Estimate message ────────────────────────────────────────────────────── */
 function EstimateMsg({ msgIdx, est, subtasks, busy, onToggle, onApprove }: {
   msgIdx: number; est: TaskEstimate; subtasks: Subtask[];
@@ -1082,6 +1229,11 @@ function EstimateMsg({ msgIdx, est, subtasks, busy, onToggle, onApprove }: {
         Снимите галочки с ненужного и нажмите <strong>Запустить</strong>.
       </p>
       <div className="flex flex-wrap gap-1.5 mb-4">
+        {est.type && (
+          <span className="text-xs bg-accent/10 border border-accent/20 text-accent px-2 py-1 rounded-lg font-medium">
+            {est.intent ? `${est.intent} · ${est.type}` : est.type}
+          </span>
+        )}
         <span className="text-xs bg-surface-2 border border-border text-text-sub px-2 py-1 rounded-lg">~{est.estimated_minutes} мин</span>
         <span className="text-xs bg-surface-2 border border-border text-text-sub px-2 py-1 rounded-lg">{est.total_credits.toFixed(0)} кредитов</span>
         <span className={`text-xs px-2 py-1 rounded-lg border ${

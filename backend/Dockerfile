@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# Headless browser for typed verification (live DOM + console errors + screenshot diff)
+RUN playwright install --with-deps chromium
+
 COPY . .
 
 EXPOSE 8000
