@@ -40,88 +40,101 @@ class LayerDefault:
     max_tokens: int
 
 
-_MODEL = settings.CLAUDE_MODEL
-# Ideal: a cheap haiku snapshot for the high-frequency triage call. This API key
-# currently only exposes the sonnet-4 snapshot (others → 404), so triage runs on
-# _MODEL for now. When a haiku snapshot is available, override the triage_router
-# layer's model via the llm_layers DB table (admin) — no code change needed.
-_TRIAGE_MODEL = _MODEL
+# Model tiers (price/quality). Override per-layer via the llm_layers DB table (admin).
+#   Haiku 4.5  $1/$5   — cheap, high-frequency, low-stakes (triage, simple fixes)
+#   Sonnet 4.6 $3/$15  — default for most tasks
+#   Opus 4.8   $5/$25  — heavy agentic code work (generation, executor, integrations)
+_HAIKU = "claude-haiku-4-5"
+_SONNET = "claude-sonnet-4-6"
+_OPUS = "claude-opus-4-8"
+_MODEL = settings.CLAUDE_MODEL  # global fallback for unknown layers / ClaudeClient
+
+# Old model IDs that were set by previous seed runs. If a row's current model
+# matches one of these, seed_layers() will migrate it to the new per-layer
+# default. Rows where the admin already picked a current model are left alone.
+_MANAGED_MODELS = {
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-20250514",
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+}
 
 LAYER_DEFAULTS: dict[str, LayerDefault] = {
     "triage_router": LayerDefault(
         name="Триаж (классификация запроса)",
         description="Двухуровневая классификация: намерение (intent) → тип (type). Дешёвая модель.",
-        product="sitedoc", model=_TRIAGE_MODEL, system_prompt=TRIAGE_ROUTER_SYSTEM, max_tokens=1024,
+        product="sitedoc", model=_HAIKU, system_prompt=TRIAGE_ROUTER_SYSTEM, max_tokens=1024,
     ),
     "task_estimator": LayerDefault(
         name="Оценка задач (ТЗ → подзадачи)",
         description="Анализирует ТЗ пользователя и структуру сайта, разбивает на подзадачи с оценкой кредитов.",
-        product="sitedoc", model=_MODEL, system_prompt=ESTIMATOR_SYSTEM, max_tokens=4096,
+        product="sitedoc", model=_SONNET, system_prompt=ESTIMATOR_SYSTEM, max_tokens=4096,
     ),
     "task_executor": LayerDefault(
         name="Выполнение задач (правки файлов)",
         description="Планирует и применяет изменения файлов сайта по SSH.",
-        product="sitedoc", model=_MODEL, system_prompt=EXECUTOR_SYSTEM, max_tokens=4096,
+        product="sitedoc", model=_SONNET, system_prompt=EXECUTOR_SYSTEM, max_tokens=4096,
     ),
     "auto_fix": LayerDefault(
         name="Авто-фикс деплоя",
         description="Предлагает shell-команды для исправления упавшего шага деплоя.",
-        product="deploy", model=_MODEL, system_prompt=AUTO_FIX_SYSTEM, max_tokens=1024,
+        product="deploy", model=_HAIKU, system_prompt=AUTO_FIX_SYSTEM, max_tokens=1024,
     ),
     "task_auto_fix": LayerDefault(
         name="Авто-фикс задач (самовосстановление)",
         description="Анализирует ошибку выполнения подзадачи и предлагает исправление (правки или команды).",
-        product="sitedoc", model=_MODEL, system_prompt=TASK_AUTO_FIX_SYSTEM, max_tokens=2048,
+        product="sitedoc", model=_SONNET, system_prompt=TASK_AUTO_FIX_SYSTEM, max_tokens=2048,
     ),
     "task_agent": LayerDefault(
         name="Агент-исполнитель (tool-use loop)",
         description="Агентный исполнитель подзадач: исследует код инструментами (read/grep/list), правит точечно, сам проверяет результат.",
-        product="sitedoc", model=_MODEL, system_prompt=AGENT_SYSTEM, max_tokens=8192,
+        product="sitedoc", model=_OPUS, system_prompt=AGENT_SYSTEM, max_tokens=8192,
     ),
     "integration_agent": LayerDefault(
         name="Агент интеграций (внешний API)",
         description="Подключает внешний сервис (OAuth/оплата/вебхуки) по скелету провайдера, ставит паузу на секреты.",
-        product="sitedoc", model=_MODEL, system_prompt=INTEGRATION_AGENT_SYSTEM, max_tokens=8192,
+        product="sitedoc", model=_OPUS, system_prompt=INTEGRATION_AGENT_SYSTEM, max_tokens=8192,
     ),
     "parser_agent": LayerDefault(
         name="Агент парсеров (сбор данных)",
         description="Создаёт парсер/сборщик данных по скелету: источник→нормализация→хранилище→расписание.",
-        product="sitedoc", model=_MODEL, system_prompt=PARSER_AGENT_SYSTEM, max_tokens=8192,
+        product="sitedoc", model=_SONNET, system_prompt=PARSER_AGENT_SYSTEM, max_tokens=8192,
     ),
     "answerer": LayerDefault(
         name="Ответчик (info, только чтение)",
         description="Отвечает на вопросы о сайте в режиме только-чтение (investigate/question), без правок.",
-        product="sitedoc", model=_MODEL, system_prompt=ANSWERER_SYSTEM, max_tokens=4096,
+        product="sitedoc", model=_SONNET, system_prompt=ANSWERER_SYSTEM, max_tokens=4096,
     ),
     "code_gen": LayerDefault(
         name="Генерация кода",
         description="Превращает спецификацию проекта в набор файлов (Docker).",
-        product="appforge", model=_MODEL, system_prompt=CODE_GENERATOR_SYSTEM, max_tokens=8192,
+        product="appforge", model=_OPUS, system_prompt=CODE_GENERATOR_SYSTEM, max_tokens=8192,
     ),
     "mockup": LayerDefault(
         name="Генерация HTML-макета",
         description="Создаёт интерактивный HTML-прототип продукта.",
-        product="appforge", model=_MODEL, system_prompt=MOCKUP_SYSTEM, max_tokens=8000,
+        product="appforge", model=_SONNET, system_prompt=MOCKUP_SYSTEM, max_tokens=8000,
     ),
     "phase_1": LayerDefault(
         name="Фаза 1 — Идея",
         description="Онбординг: понять пользователя, проблему, тип проекта.",
-        product="appforge", model=_MODEL, system_prompt=PHASE_1_SYSTEM, max_tokens=4096,
+        product="appforge", model=_SONNET, system_prompt=PHASE_1_SYSTEM, max_tokens=4096,
     ),
     "phase_2": LayerDefault(
         name="Фаза 2 — Продукт",
         description="Определение фич MVP с учётом ML-паттернов.",
-        product="appforge", model=_MODEL, system_prompt=PHASE_2_SYSTEM, max_tokens=4096,
+        product="appforge", model=_SONNET, system_prompt=PHASE_2_SYSTEM, max_tokens=4096,
     ),
     "phase_3": LayerDefault(
         name="Фаза 3 — Архитектура",
         description="Проектирование флоу и стека простым языком.",
-        product="appforge", model=_MODEL, system_prompt=PHASE_3_SYSTEM, max_tokens=4096,
+        product="appforge", model=_SONNET, system_prompt=PHASE_3_SYSTEM, max_tokens=4096,
     ),
     "phase_4": LayerDefault(
         name="Фаза 4 — Деплой",
         description="Подтверждение готовности к деплою.",
-        product="appforge", model=_MODEL, system_prompt=PHASE_4_SYSTEM, max_tokens=4096,
+        product="appforge", model=_SONNET, system_prompt=PHASE_4_SYSTEM, max_tokens=4096,
     ),
 }
 
@@ -188,6 +201,10 @@ def seed_layers() -> None:
                 changed = True
             else:
                 row = rows[key]
+                # Migrate old seed-managed model IDs to new per-layer defaults.
+                if row.model in _MANAGED_MODELS and row.model != d.model:
+                    row.model = d.model
+                    changed = True
                 # Always sync max_tokens (safe)
                 if row.max_tokens != d.max_tokens:
                     row.max_tokens = d.max_tokens

@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import MobileTopBar from "@/components/layout/MobileTopBar";
+import MobileDrawer from "@/components/layout/MobileDrawer";
+import MobileTabBar from "@/components/layout/MobileTabBar";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 type FileStructure = { root?: string; entries?: string[] } | null;
@@ -122,20 +125,29 @@ function LogBlock({ logs, running, siteId, taskId, lazy, autoExpand, onRollback,
   const [collapsed, setCollapsed] = useState(!running && !autoExpand);
   const [fetched, setFetched] = useState<LogLine[] | null>(null);
   const [loading, setLoading] = useState(false);
+  // Отдельно отслеживаем ошибку загрузки, чтобы не перекрывать её "логи не сохранились"
+  const [fetchFailed, setFetchFailed] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   const effectiveLogs = logs ?? fetched ?? [];
 
   // Lazily load persisted logs for finished tasks (on first expand).
   useEffect(() => {
-    if (collapsed || !lazy || logs || fetched || loading) return;
+    // Не загружаем повторно при наличии ошибки — пользователь должен нажать "повторить"
+    if (collapsed || !lazy || logs || fetched || loading || fetchFailed) return;
     if (!siteId || !taskId) return;
     setLoading(true);
     api.get<LogLine[]>(`/api/sites/${siteId}/tasks/${taskId}/logs`)
-      .then(({ data }) => setFetched(data.map(d => ({ ...d, type: "log" }))))
-      .catch(() => setFetched([]))
+      .then(({ data }) => { setFetched(data.map(d => ({ ...d, type: "log" }))); setFetchFailed(false); })
+      .catch(() => setFetchFailed(true))   // не сбрасываем fetched в [] — ошибка ≠ пустые логи
       .finally(() => setLoading(false));
-  }, [collapsed, lazy, logs, fetched, loading, siteId, taskId]);
+  }, [collapsed, lazy, logs, fetched, loading, fetchFailed, siteId, taskId]);
+
+  // Ручной повтор после ошибки
+  function retryFetch() {
+    if (!siteId || !taskId || loading) return;
+    setFetchFailed(false);   // сбросит флаг → effect сработает снова
+  }
 
   useEffect(() => {
     if (logRef.current && running) {
@@ -145,6 +157,9 @@ function LogBlock({ logs, running, siteId, taskId, lazy, autoExpand, onRollback,
 
   const successCount = effectiveLogs.filter(l => l.status === "success").length;
   const errorCount = effectiveLogs.filter(l => l.status === "error").length;
+
+  // Ждём первой загрузки: lazy=true, fetched ещё не пришёл и ошибки нет
+  const pendingFetch = lazy && !logs && fetched === null && !fetchFailed;
 
   return (
     <div className="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden">
@@ -157,6 +172,8 @@ function LogBlock({ logs, running, siteId, taskId, lazy, autoExpand, onRollback,
             </svg>
           ) : rolledBack ? (
             <span className="w-2.5 h-2.5 rounded-full bg-amber-400"/>
+          ) : fetchFailed ? (
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400"/>
           ) : errorCount > 0 ? (
             <span className="w-2.5 h-2.5 rounded-full bg-red-400"/>
           ) : (
@@ -165,6 +182,7 @@ function LogBlock({ logs, running, siteId, taskId, lazy, autoExpand, onRollback,
           <span className="text-xs font-medium text-gray-600">
             {running ? "выполняется..."
               : rolledBack ? "откатено"
+              : fetchFailed ? "ошибка загрузки лога"
               : effectiveLogs.length === 0 ? "лог"
               : `${successCount} успешно${errorCount > 0 ? ` · ${errorCount} ошибок` : ""}`}
           </span>
@@ -186,22 +204,32 @@ function LogBlock({ logs, running, siteId, taskId, lazy, autoExpand, onRollback,
       {/* Log lines */}
       {!collapsed && (
         <div ref={logRef} className="px-4 py-3 font-mono text-xs space-y-1.5 max-h-64 overflow-y-auto bg-white">
-          {effectiveLogs.length === 0 && (running || loading) && (
+          {/* Спиннер: либо подключаемся к WS, либо идёт lazy-fetch */}
+          {(running || loading || pendingFetch) && effectiveLogs.length === 0 && (
             <div className="flex items-center gap-2 text-slate-400">
               <svg className="animate-spin" width="10" height="10" viewBox="0 0 10 10" fill="none">
                 <circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1.2" strokeDasharray="12 8"/>
               </svg>
-              <span>{loading ? "загружаю логи..." : "подключаюсь к серверу..."}</span>
+              <span>{running && !loading ? "подключаюсь к серверу..." : "загружаю логи..."}</span>
             </div>
           )}
-          {effectiveLogs.length === 0 && !running && !loading && errorMessage && (
+          {/* Ошибка загрузки с кнопкой повтора */}
+          {fetchFailed && !loading && (
+            <span className="text-slate-400 italic">
+              не удалось загрузить логи —{" "}
+              <button onClick={retryFetch} className="text-accent hover:underline">повторить</button>
+            </span>
+          )}
+          {/* Логи действительно пусты (fetch завершён, пришёл пустой массив) */}
+          {effectiveLogs.length === 0 && !running && !loading && !pendingFetch && !fetchFailed && !errorMessage && (
+            <span className="text-slate-400 italic">логи не сохранились</span>
+          )}
+          {/* Ошибка задачи (без логов) */}
+          {effectiveLogs.length === 0 && !running && !loading && !pendingFetch && !fetchFailed && errorMessage && (
             <div className="flex items-start gap-2 text-red-600 leading-relaxed">
               <span className="flex-shrink-0 select-none w-3 text-center">✗</span>
               <span className="break-all">{errorMessage}</span>
             </div>
-          )}
-          {effectiveLogs.length === 0 && !running && !loading && !errorMessage && (
-            <span className="text-slate-400 italic">логи не сохранились</span>
           )}
           {effectiveLogs.map((log, i) => (
             <div key={i} className={`flex items-start gap-2 leading-relaxed ${
@@ -340,9 +368,9 @@ function InfoRow({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
-function ProjectInfo({ site, tasks, onRollback, onRescan, rescanning }: {
+function ProjectInfo({ site, tasks, onRollback, onRescan, rescanning, embedded }: {
   site: Site | null; tasks: Task[]; onRollback: (taskId: string) => void;
-  onRescan: () => void; rescanning: boolean;
+  onRescan: () => void; rescanning: boolean; embedded?: boolean;
 }) {
   if (!site) return null;
 
@@ -360,8 +388,8 @@ function ProjectInfo({ site, tasks, onRollback, onRescan, rescanning }: {
   const treePathSet = new Set(site.file_structure?.entries ?? []);
   const orphanDiffs = Object.entries(diffs).filter(([p]) => !treePathSet.has(p));
 
-  return (
-    <aside className="w-72 bg-surface border-r border-border flex-shrink-0 overflow-y-auto">
+  const content = (
+    <>
       {/* Server / stack */}
       <div className="px-4 py-3 border-b border-border">
         <h3 className="text-[11px] font-semibold text-text-muted uppercase tracking-wide mb-2">Сервер и стек</h3>
@@ -446,6 +474,13 @@ function ProjectInfo({ site, tasks, onRollback, onRescan, rescanning }: {
           </div>
         )}
       </div>
+    </>
+  );
+
+  if (embedded) return content;
+  return (
+    <aside className="hidden md:block w-72 bg-surface border-r border-border flex-shrink-0 overflow-y-auto">
+      {content}
     </aside>
   );
 }
@@ -455,6 +490,8 @@ export default function SitePage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("tasks");
+  const [navOpen, setNavOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [site, setSite] = useState<Site | null>(null);
 
   // Chat state
@@ -843,11 +880,8 @@ export default function SitePage() {
     : "Опишите задачу или ответьте на вопрос... (⌘↵ отправить)";
 
   /* ── Render ─────────────────────────────────────────────────────────────── */
-  return (
-    <div className="flex h-screen overflow-hidden bg-surface-2">
-
-      {/* ── Sidebar ── */}
-      <aside className="w-56 bg-surface border-r border-border flex flex-col flex-shrink-0">
+  const sidebarInner = (
+    <>
         <div className="px-4 py-4 border-b border-border flex items-center gap-2 h-[57px]">
           <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
@@ -879,7 +913,7 @@ export default function SitePage() {
           </div>
         )}
 
-        <nav className="flex-1 px-2 mt-3 space-y-0.5">
+        <nav className="hidden md:block flex-1 px-2 mt-3 space-y-0.5">
           {(["tasks", "audit", "history"] as Tab[]).map((t) => (
             <button key={t} onClick={() => setTab(t)}
               className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm transition-colors ${
@@ -892,17 +926,49 @@ export default function SitePage() {
             </button>
           ))}
         </nav>
+    </>
+  );
+
+  const mobileTabs = [
+    { key: "tasks",   label: "Задачи",  icon: "💬" },
+    { key: "audit",   label: "Аудит",   icon: "🔍" },
+    { key: "history", label: "История", icon: "📋" },
+    { key: "info",    label: "Инфо",    icon: "📁" },
+  ];
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-surface-2">
+
+      {/* ── Sidebar (desktop) ── */}
+      <aside className="hidden md:flex w-56 bg-surface border-r border-border flex-col flex-shrink-0">
+        {sidebarInner}
       </aside>
 
-      {/* ── Project info column ── */}
+      {/* ── Mobile nav (burger) ── */}
+      <MobileTopBar title={site?.name || "SiteDoc"} onMenu={() => setNavOpen(true)} />
+      <MobileDrawer open={navOpen} onClose={() => setNavOpen(false)}>
+        {sidebarInner}
+      </MobileDrawer>
+
+      {/* ── Project info column (desktop) ── */}
       <ProjectInfo site={site} tasks={allTasks} onRollback={handleRollback} onRescan={handleRescan} rescanning={rescanning} />
 
+      {/* ── Project info sheet (mobile) ── */}
+      <MobileDrawer open={infoOpen} onClose={() => setInfoOpen(false)} side="right">
+        <div className="px-4 flex items-center justify-between h-[57px] border-b border-border flex-shrink-0">
+          <span className="text-sm font-semibold text-text-main">Проект</span>
+          <button onClick={() => setInfoOpen(false)} aria-label="Закрыть"
+            className="w-9 h-9 -mr-1 flex items-center justify-center rounded-xl text-text-muted hover:text-text-main hover:bg-surface-2 transition-colors text-xl leading-none">×</button>
+        </div>
+        <ProjectInfo site={site} tasks={allTasks} onRollback={handleRollback} onRescan={handleRescan} rescanning={rescanning} embedded />
+      </MobileDrawer>
+
       {/* ── Main ── */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden pt-[57px] md:pt-0 pb-[57px] md:pb-0">
         {tab === "tasks" && (
           <>
             {/* Chat thread */}
-            <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+            <div className="flex-1 overflow-y-auto px-4 md:px-6 py-6 space-y-5">
 
               {/* Show earlier tasks */}
               {hiddenTasks.length > 0 && (
@@ -1142,6 +1208,13 @@ export default function SitePage() {
           </div>
         )}
       </main>
+
+      {/* ── Mobile bottom tab bar ── */}
+      <MobileTabBar
+        items={mobileTabs}
+        active={infoOpen ? "info" : tab}
+        onSelect={(k) => { if (k === "info") setInfoOpen(true); else { setInfoOpen(false); setTab(k as Tab); } }}
+      />
     </div>
   );
 }

@@ -77,7 +77,10 @@ class ClaudeClient:
             "tools": tools,
         }
         if thinking_tokens and thinking_tokens > 0:
-            kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_tokens}
+            # Adaptive thinking: model decides budget; "enabled" with budget_tokens
+            # returns 400 on Opus 4.8 / Sonnet 4.6. thinking_tokens is kept as a
+            # boolean flag — set >0 to enable, actual budget is model-managed.
+            kwargs["thinking"] = {"type": "adaptive"}
         try:
             return self.client.messages.create(**kwargs)
         except TypeError as e:

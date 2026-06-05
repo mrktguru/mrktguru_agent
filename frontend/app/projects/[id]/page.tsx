@@ -195,8 +195,8 @@ export default function ProjectPage() {
                 key={i}
                 className={
                   m.role === "user"
-                    ? "ml-12 rounded-lg bg-indigo-500/10 p-3"
-                    : "mr-12 rounded-lg bg-gray-800/40 p-3"
+                    ? "ml-6 md:ml-12 rounded-lg bg-indigo-500/10 p-3"
+                    : "mr-6 md:mr-12 rounded-lg bg-gray-800/40 p-3"
                 }
               >
                 <div className="text-xs text-gray-500">{m.role === "user" ? "Вы" : "Агент"}</div>
@@ -340,7 +340,7 @@ export default function ProjectPage() {
 
   // ---- Phases 1-3: classic two-column layout ----
   return (
-    <main className="mx-auto grid max-w-6xl grid-cols-1 gap-6 px-6 py-8 lg:grid-cols-[1fr_360px]">
+    <main className="mx-auto grid max-w-6xl grid-cols-1 gap-6 px-4 md:px-6 py-8 lg:grid-cols-[1fr_360px]">
       <section className="flex h-[calc(100vh-8rem)] flex-col rounded-xl border border-gray-800">
         <header className="flex items-center justify-between border-b border-gray-800 px-4 py-3 text-sm text-gray-400">
           <div>
@@ -360,8 +360,8 @@ export default function ProjectPage() {
                 key={i}
                 className={
                   m.role === "user"
-                    ? "ml-12 rounded-lg bg-indigo-500/10 p-3"
-                    : "mr-12 rounded-lg bg-gray-800/40 p-3"
+                    ? "ml-6 md:ml-12 rounded-lg bg-indigo-500/10 p-3"
+                    : "mr-6 md:mr-12 rounded-lg bg-gray-800/40 p-3"
                 }
               >
                 <div className="text-xs text-gray-500">{m.role === "user" ? "Вы" : "Агент"}</div>

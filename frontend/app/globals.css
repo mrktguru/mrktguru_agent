@@ -18,6 +18,12 @@ body {
   min-height: 100vh;
 }
 
+/* Не допускаем горизонтального оверфлоу на узких экранах */
+html, body { max-width: 100%; overflow-x: hidden; }
+
+/* Safe-area отступ для фиксированного нижнего таб-бара (iPhone home indicator) */
+.pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 4px; }

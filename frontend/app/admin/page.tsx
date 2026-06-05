@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import MobileTopBar from "@/components/layout/MobileTopBar";
+import MobileDrawer from "@/components/layout/MobileDrawer";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 type Me = { email: string; is_admin?: boolean };
@@ -55,6 +57,9 @@ export default function AdminPage() {
   const router = useRouter();
   const [section, setSection] = useState<Section>("overview");
   const [authorized, setAuthorized] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
+
+  function selectSection(key: Section) { setSection(key); setNavOpen(false); }
 
   useEffect(() => {
     api.get<Me>("/api/auth/me")
@@ -75,10 +80,8 @@ export default function AdminPage() {
     );
   }
 
-  return (
-    <div className="flex h-screen overflow-hidden bg-surface-2">
-      {/* Sidebar */}
-      <aside className="w-60 bg-surface border-r border-border flex flex-col flex-shrink-0">
+  const sidebarInner = (
+    <>
         <div className="px-5 border-b border-border flex items-center gap-2.5 h-[57px] flex-shrink-0">
           <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
@@ -93,7 +96,7 @@ export default function AdminPage() {
           {NAV.map((n) => (
             <button
               key={n.key}
-              onClick={() => setSection(n.key)}
+              onClick={() => selectSection(n.key)}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-colors text-left ${
                 section === n.key ? "bg-accent/8 text-accent font-medium" : "text-text-sub hover:bg-surface-2 hover:text-text-main"
               }`}
@@ -115,14 +118,30 @@ export default function AdminPage() {
             Назад в дашборд
           </button>
         </div>
+    </>
+  );
+
+  const sectionLabel = NAV.find((n) => n.key === section)?.label ?? "Админка";
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-surface-2">
+      {/* Sidebar (desktop) */}
+      <aside className="hidden md:flex w-60 bg-surface border-r border-border flex-col flex-shrink-0">
+        {sidebarInner}
       </aside>
 
+      {/* Mobile nav */}
+      <MobileTopBar title={sectionLabel} onMenu={() => setNavOpen(true)} />
+      <MobileDrawer open={navOpen} onClose={() => setNavOpen(false)}>
+        {sidebarInner}
+      </MobileDrawer>
+
       {/* Content */}
-      <main className="flex-1 overflow-y-auto">
-        <div className="sticky top-0 bg-surface border-b border-border px-8 flex items-center h-[57px] z-10">
-          <h1 className="text-base font-semibold text-text-main">{NAV.find((n) => n.key === section)?.label}</h1>
+      <main className="flex-1 overflow-y-auto pt-[57px] md:pt-0">
+        <div className="hidden md:flex sticky top-0 bg-surface border-b border-border px-8 items-center h-[57px] z-10">
+          <h1 className="text-base font-semibold text-text-main">{sectionLabel}</h1>
         </div>
-        <div className="px-8 py-6">
+        <div className="px-4 md:px-8 py-6">
           {section === "overview" && <OverviewSection />}
           {section === "users" && <UsersSection />}
           {section === "sites" && <SitesSection />}
@@ -170,8 +189,8 @@ function UsersSection() {
   }
 
   return (
-    <div className="bg-surface rounded-2xl border border-border shadow-card overflow-hidden">
-      <table className="w-full text-sm">
+    <div className="bg-surface rounded-2xl border border-border shadow-card overflow-x-auto">
+      <table className="w-full text-sm whitespace-nowrap">
         <thead>
           <tr className="text-left text-xs text-text-muted border-b border-border">
             <th className="px-4 py-3 font-medium">Email</th>
@@ -225,8 +244,8 @@ function SitesSection() {
   const [sites, setSites] = useState<AdminSite[]>([]);
   useEffect(() => { api.get<AdminSite[]>("/api/admin/sites").then(({ data }) => setSites(data)); }, []);
   return (
-    <div className="bg-surface rounded-2xl border border-border shadow-card overflow-hidden">
-      <table className="w-full text-sm">
+    <div className="bg-surface rounded-2xl border border-border shadow-card overflow-x-auto">
+      <table className="w-full text-sm whitespace-nowrap">
         <thead>
           <tr className="text-left text-xs text-text-muted border-b border-border">
             <th className="px-4 py-3 font-medium">Сайт</th>
@@ -288,8 +307,8 @@ function TasksSection() {
 
   return (
     <>
-      <div className="bg-surface rounded-2xl border border-border shadow-card overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-surface rounded-2xl border border-border shadow-card overflow-x-auto">
+        <table className="w-full text-sm whitespace-nowrap">
           <thead>
             <tr className="text-left text-xs text-text-muted border-b border-border">
               <th className="px-4 py-3 font-medium">Задача</th>

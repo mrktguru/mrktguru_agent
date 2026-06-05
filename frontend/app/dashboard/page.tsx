@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import MobileTopBar from "@/components/layout/MobileTopBar";
+import MobileDrawer from "@/components/layout/MobileDrawer";
 
 type Site = {
   id: string; name: string; url: string | null; status: string;
@@ -31,6 +33,7 @@ export default function DashboardPage() {
   const [user, setUser] = useState<User | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [navOpen, setNavOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -68,10 +71,8 @@ export default function DashboardPage() {
     } catch { router.push("/login"); }
   }
 
-  return (
-    <div className="flex h-screen overflow-hidden bg-surface-2">
-      {/* ── Left sidebar ── */}
-      <aside className="w-60 bg-surface border-r border-border flex flex-col flex-shrink-0">
+  const sidebarInner = (
+    <>
         {/* Logo */}
         <div className="px-5 border-b border-border flex items-center gap-2.5 h-[57px] flex-shrink-0">
           <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center flex-shrink-0">
@@ -175,16 +176,30 @@ export default function DashboardPage() {
             </button>
           </div>
         )}
+    </>
+  );
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-surface-2">
+      {/* ── Left sidebar (desktop) ── */}
+      <aside className="hidden md:flex w-60 bg-surface border-r border-border flex-col flex-shrink-0">
+        {sidebarInner}
       </aside>
 
+      {/* ── Mobile nav ── */}
+      <MobileTopBar title="Проекты" onMenu={() => setNavOpen(true)} />
+      <MobileDrawer open={navOpen} onClose={() => setNavOpen(false)}>
+        {sidebarInner}
+      </MobileDrawer>
+
       {/* ── Main content ── */}
-      <main className="flex-1 overflow-y-auto">
-        {/* Header */}
-        <div className="sticky top-0 bg-surface border-b border-border px-8 flex items-center h-[57px] z-10">
+      <main className="flex-1 overflow-y-auto pt-[57px] md:pt-0">
+        {/* Header (desktop) */}
+        <div className="hidden md:flex sticky top-0 bg-surface border-b border-border px-8 items-center h-[57px] z-10">
           <h1 className="text-base font-semibold text-text-main">Проекты</h1>
         </div>
 
-        <div className="px-8 py-6">
+        <div className="px-4 md:px-8 py-6">
           {sites.length === 0 ? (
             /* Empty state */
             <div className="flex flex-col items-center justify-center text-center min-h-80 max-w-sm mx-auto">

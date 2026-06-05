@@ -18,7 +18,9 @@ bcrypt==4.2.1
 cryptography==44.0.0
 
 # AI
-anthropic==0.49.0
+# >=0.69 required for adaptive thinking (thinking={"type":"adaptive"}) and the
+# Claude 4.6/4.8 model strings used in the LLM layer registry.
+anthropic>=0.69.0
 
 # Background tasks
 celery[redis]==5.4.0
