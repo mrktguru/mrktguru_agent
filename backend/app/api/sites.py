@@ -17,7 +17,7 @@ from app.models.site import Site
 from app.models.task import Task
 from app.models.task_log import TaskLog
 from app.schemas.site import (
-    ClarificationResponse, ClarifyRequest,
+    AnswerResponse, ClarificationResponse, ClarifyRequest,
     RejectResponse, ResumeRequest,
     SiteCreate, SitePublic, SiteScanResult,
     TaskCreate, TaskEstimateResponse, TaskPublic, TaskLogPublic,
@@ -239,7 +239,7 @@ async def list_tasks(site_id: str, user: CurrentUser, db: DB) -> list[TaskPublic
 
 
 @router.post("/{site_id}/tasks", status_code=status.HTTP_201_CREATED)
-async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: DB) -> Union[TaskEstimateResponse, ClarificationResponse, RejectResponse]:
+async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: DB) -> Union[TaskEstimateResponse, ClarificationResponse, RejectResponse, AnswerResponse]:
     """Submit a TZ → agent estimates subtasks OR asks clarifying questions."""
     from app.services.agent.task_estimator import TaskEstimator
 
@@ -284,6 +284,48 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
         ssh_client.connect()
     except Exception:
         ssh_client = None  # silently degrade — estimation still works via DB
+
+    # ── info intent → read-only answer (no edits, no estimation) ─────────────
+    if tri.get("intent") == "info":
+        from app.services.agent.answerer import answer_question
+        try:
+            answer = answer_question(site, ssh_client, payload.tz_text) if ssh_client \
+                else "Не удалось подключиться к серверу для анализа."
+        except Exception as exc:
+            answer = f"Не удалось проанализировать: {exc}"
+        finally:
+            if ssh_client:
+                try: ssh_client.close()
+                except Exception: pass
+        task.status = "answered"
+        task.answer_text = answer
+        task.title = (payload.tz_text or "Вопрос")[:80]
+        await db.commit()
+        return AnswerResponse(task_id=str(task.id), answer=answer)
+
+    # ── recover intent → surface restore points (actual rollback via existing UI) ─
+    if tri.get("type") == "recover":
+        from sqlalchemy import select as _sel
+        pts = (await db.scalars(
+            _sel(Task).where(Task.site_id == uuid.UUID(site_id), Task.backup_available == True)  # noqa: E712
+            .order_by(Task.created_at.desc()).limit(10)
+        )).all()
+        if ssh_client:
+            try: ssh_client.close()
+            except Exception: pass
+        if pts:
+            lines = ["Доступные точки восстановления (нажмите «Откатить» у нужной в панели справа):"]
+            for t in pts:
+                ts = t.created_at.strftime("%d %b %H:%M") if t.created_at else ""
+                lines.append(f"• {(t.title or t.tz_text or 'Задача')[:60]} — {ts}")
+            answer = "\n".join(lines)
+        else:
+            answer = "Точек восстановления нет — бэкапы появляются после выполнения задач."
+        task.status = "answered"
+        task.answer_text = answer
+        task.title = (payload.tz_text or "Восстановление")[:80]
+        await db.commit()
+        return AnswerResponse(task_id=str(task.id), answer=answer)
 
     # Fetch recent completed tasks so the estimator can understand follow-up messages
     # (e.g. "the changes didn't apply" → agent sees what files were changed last time)

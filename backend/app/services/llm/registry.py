@@ -26,6 +26,7 @@ from app.services.claude.prompts import (
     TRIAGE_ROUTER_SYSTEM,
     INTEGRATION_AGENT_SYSTEM,
     PARSER_AGENT_SYSTEM,
+    ANSWERER_SYSTEM,
 )
 
 
@@ -86,6 +87,11 @@ LAYER_DEFAULTS: dict[str, LayerDefault] = {
         name="Агент парсеров (сбор данных)",
         description="Создаёт парсер/сборщик данных по скелету: источник→нормализация→хранилище→расписание.",
         product="sitedoc", model=_MODEL, system_prompt=PARSER_AGENT_SYSTEM, max_tokens=8192,
+    ),
+    "answerer": LayerDefault(
+        name="Ответчик (info, только чтение)",
+        description="Отвечает на вопросы о сайте в режиме только-чтение (investigate/question), без правок.",
+        product="sitedoc", model=_MODEL, system_prompt=ANSWERER_SYSTEM, max_tokens=4096,
     ),
     "code_gen": LayerDefault(
         name="Генерация кода",

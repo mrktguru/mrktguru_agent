@@ -665,6 +665,9 @@ export default function SitePage() {
       if ((data as RejectResp).status === "rejected") {
         replaceLast({ kind: "rejected", text: (data as RejectResp).message });
         setPendingClarify(null);
+      } else if ((data as any).status === "answered") {
+        replaceLast({ kind: "answered", taskId: (data as any).task_id, answer: (data as any).answer });
+        setPendingClarify(null);
       } else if ((data as Clarification).status === "needs_clarification") {
         const cl = data as Clarification;
         replaceLast({ kind: "clarify", data: cl });
