@@ -32,11 +32,9 @@ type Layer = {
 
 type Section = "overview" | "users" | "sites" | "tasks" | "models" | "billing";
 
-const PRODUCT_LABEL: Record<string, string> = { sitedoc: "SiteDoc", deploy: "Deploy", appforge: "AppForge" };
+const PRODUCT_LABEL: Record<string, string> = { sitedoc: "SiteDoc" };
 const PRODUCT_COLOR: Record<string, string> = {
   sitedoc: "bg-indigo-50 text-indigo-600 border-indigo-100",
-  deploy: "bg-amber-50 text-amber-600 border-amber-100",
-  appforge: "bg-purple-50 text-purple-600 border-purple-100",
 };
 const STATUS_COLOR: Record<string, string> = {
   done: "text-emerald-600", failed: "text-red-500", running: "text-accent",

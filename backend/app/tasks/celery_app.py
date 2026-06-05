@@ -7,7 +7,7 @@ celery_app = Celery(
     "mrktguru_agent",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.deploy", "app.tasks.monitor", "app.tasks.execute", "app.tasks.backups"],
+    include=["app.tasks.execute", "app.tasks.backups"],
 )
 
 celery_app.conf.update(

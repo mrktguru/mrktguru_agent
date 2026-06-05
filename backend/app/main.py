@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, agent, auth, backlog, deploy, projects, servers, sites, tasks
+from app.api import admin, auth, servers, sites, tasks
 from app.api.tasks_ws import ws_router as tasks_ws_router
 from app.core.config import settings
 
@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="MRKTGURU Agent",
-    description="AI-powered app builder platform",
+    description="AI agent for editing existing sites",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -42,11 +42,6 @@ async def health() -> dict[str, str]:
 
 app.include_router(auth.router)
 app.include_router(servers.router)
-app.include_router(projects.router)
-app.include_router(agent.router)
-app.include_router(backlog.router)
-app.include_router(deploy.router)
-app.include_router(deploy.ws_router)
 app.include_router(sites.router)
 app.include_router(tasks.router)
 app.include_router(admin.router)

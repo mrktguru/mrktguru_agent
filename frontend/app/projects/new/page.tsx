@@ -33,8 +33,6 @@ type Screen =
   | "name"
   | "server"
   | "discovery"
-  | "new_git"
-  | "new_describe"
   | "working";
 
 /* ─── Progress bar ───────────────────────────────────────────────────────── */
@@ -179,9 +177,8 @@ export default function NewProjectPage() {
   const [scanLog, setScanLog] = useState<string[]>([]);
   const [discovered, setDiscovered] = useState<DiscoveredSite[]>([]);
 
-  // Step 4 — fork
+  // Step 4 — connect selected site
   const [selectedSite, setSelectedSite] = useState<DiscoveredSite | null>(null);
-  const [projectDesc, setProjectDesc] = useState("");
 
   const setS = (k: keyof typeof srv, v: string) => setSrv((f) => ({ ...f, [k]: v }));
 
@@ -243,10 +240,8 @@ export default function NewProjectPage() {
       setDiscovered(data);
       setScanLog((p) => [...p, `✓ Найдено проектов: ${data.length}`]);
       setLoading(false);
-      // Nothing found → go straight to "create new"
       if (data.length === 0) {
-        setScanLog((p) => [...p, "Готовых проектов не найдено — создадим новый"]);
-        setTimeout(() => setScreen("new_git"), 800);
+        setScanLog((p) => [...p, "Сайтов на сервере не найдено"]);
       }
     } catch (err: any) {
       setError(err?.response?.data?.detail || "Ошибка обнаружения");
@@ -287,37 +282,6 @@ export default function NewProjectPage() {
       router.push(`/site/${createdSite.id}`);
     } catch (err: any) {
       const msg = err?.response?.data?.detail || "Ошибка подключения";
-      setError(msg);
-      setScanLog((p) => [...p, `✗ ${msg}`]);
-      setLoading(false);
-    }
-  }
-
-  /* ── Fork B — create new project ── */
-  async function handleCreateProject() {
-    setScreen("working");
-    setLoading(true);
-    setError("");
-    setScanLog(["📦 Создаю проект..."]);
-    try {
-      const { data: project } = await api.post<{ id: string }>("/api/projects", {
-        name: projectName,
-        server_id: selectedServerId || undefined,
-      });
-      setScanLog((p) => [...p, "✓ Проект создан", "🤖 Анализирую описание..."]);
-      if (projectDesc.trim()) {
-        try {
-          await api.post(`/api/agent/${project.id}/chat`, { message: projectDesc });
-          setScanLog((p) => [...p, "✓ Описание проанализировано"]);
-        } catch {
-          setScanLog((p) => [...p, "⚠ Анализ продолжим в чате проекта"]);
-        }
-      }
-      setScanLog((p) => [...p, "✓ Открываю проект..."]);
-      await new Promise((r) => setTimeout(r, 500));
-      router.push(`/projects/${project.id}`);
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail || "Ошибка создания проекта";
       setError(msg);
       setScanLog((p) => [...p, `✗ ${msg}`]);
       setLoading(false);
@@ -541,7 +505,7 @@ export default function NewProjectPage() {
           <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
             <div className="mb-5">
               <h2 className="text-xl font-semibold text-text-main mb-1">{loading ? "Ищу проекты на сервере..." : "Что нашлось на сервере"}</h2>
-              {!loading && discovered.length > 0 && <p className="text-sm text-text-muted">Выберите проект для доработки или создайте новый</p>}
+              {!loading && discovered.length > 0 && <p className="text-sm text-text-muted">Выберите сайт для доработки</p>}
             </div>
 
             <LogTerminal lines={scanLog} loading={loading} />
@@ -568,18 +532,6 @@ export default function NewProjectPage() {
                   </button>
                 ))}
 
-                {/* Create new project */}
-                <button
-                  onClick={() => setScreen("new_git")}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-dashed border-accent/40 bg-accent/5 hover:bg-accent/10 text-left transition-colors"
-                >
-                  <span className="text-xl">✨</span>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium text-accent">Создать новый проект</p>
-                    <p className="text-xs text-text-muted">Собрать новый сайт или приложение с нуля</p>
-                  </div>
-                </button>
-
                 <div className="flex justify-start pt-1">
                   <button onClick={() => setScreen("server")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
                     Назад
@@ -587,73 +539,6 @@ export default function NewProjectPage() {
                 </div>
               </div>
             )}
-          </div>
-        )}
-
-        {/* ── Fork B step 1: Git repository (optional) ── */}
-        {screen === "new_git" && (
-          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
-            <div className="mb-5">
-              <h2 className="text-xl font-semibold text-text-main mb-1">Хранилище кода</h2>
-              <p className="text-sm text-text-muted">Подключите Git-репозиторий для версий кода — или пропустите, можно добавить позже</p>
-            </div>
-
-            <div className="space-y-2 mb-4">
-              <div className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-surface-2 opacity-60">
-                <span className="text-xl">🐙</span>
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-text-main">Создать GitHub-репозиторий</p>
-                  <p className="text-xs text-text-muted">Скоро — подключение по токену доступа</p>
-                </div>
-                <span className="text-xs px-2 py-0.5 rounded-md bg-surface-3 text-text-muted">скоро</span>
-              </div>
-            </div>
-
-            <div className="flex justify-between">
-              <button onClick={() => setScreen("discovery")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
-                Назад
-              </button>
-              <button onClick={() => setScreen("new_describe")} className="bg-accent hover:bg-accent-hover text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2">
-                Пропустить
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ── Fork B step 2: Describe new project ── */}
-        {screen === "new_describe" && (
-          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
-            <div className="mb-4">
-              <h2 className="text-xl font-semibold text-text-main mb-1">Опишите проект</h2>
-              <p className="text-sm text-text-muted">Что нужно создать? Система проанализирует и уточнит детали</p>
-            </div>
-
-            <textarea
-              className="w-full rounded-xl border border-border bg-surface-2 px-4 py-3 text-sm text-text-main placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/10 focus:bg-surface transition-colors resize-none h-36"
-              placeholder={"Например:\n«Лендинг для кофейни с меню, формой бронирования столика и картой проезда.»"}
-              value={projectDesc}
-              onChange={(e) => setProjectDesc(e.target.value)}
-              autoFocus
-            />
-
-            <div className="flex justify-between mt-5">
-              <button onClick={() => setScreen("new_git")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
-                Назад
-              </button>
-              <button
-                onClick={handleCreateProject}
-                disabled={!projectDesc.trim()}
-                className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
-              >
-                Создать и проанализировать
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            </div>
           </div>
         )}
 
@@ -667,7 +552,7 @@ export default function NewProjectPage() {
             <LogTerminal lines={scanLog} loading={loading} />
             {error && (
               <div className="mt-4 flex gap-2">
-                <button onClick={() => setScreen(selectedSite ? "discovery" : "new_describe")} className="flex-1 border border-border rounded-xl py-2.5 text-sm text-text-sub hover:bg-surface-2 transition-colors">
+                <button onClick={() => setScreen("discovery")} className="flex-1 border border-border rounded-xl py-2.5 text-sm text-text-sub hover:bg-surface-2 transition-colors">
                   Назад
                 </button>
               </div>

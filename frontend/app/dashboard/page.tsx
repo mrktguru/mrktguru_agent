@@ -24,7 +24,7 @@ const CMS_BADGE: Record<string, string> = {
 };
 
 const NAV_ITEMS = [
-  { icon: "◻", label: "Проекты", href: "/dashboard", active: true },
+  { icon: "◻", label: "Сайты", href: "/dashboard", active: true },
   { icon: "⚙", label: "Настройки", href: "#", active: false },
 ];
 
@@ -99,7 +99,7 @@ export default function DashboardPage() {
               }`}
             >
               <svg width="15" height="15" viewBox="0 0 15 15" fill="none" className="flex-shrink-0">
-                {item.label === "Проекты" ? (
+                {item.label === "Сайты" ? (
                   <>
                     <rect x="1.5" y="1.5" width="5" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
                     <rect x="8.5" y="1.5" width="5" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
@@ -119,7 +119,7 @@ export default function DashboardPage() {
 
           {/* Projects list */}
           <div className="mt-3 pt-3 border-t border-border space-y-0.5">
-            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider px-2 mb-2">Проекты</p>
+            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider px-2 mb-2">Сайты</p>
 
             {sites.map((s) => (
               <a
@@ -139,7 +139,7 @@ export default function DashboardPage() {
               <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
                 <path d="M6.5 1.5V11.5M1.5 6.5H11.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
               </svg>
-              Добавить проект
+              Добавить сайт
             </button>
           </div>
         </nav>
@@ -187,7 +187,7 @@ export default function DashboardPage() {
       </aside>
 
       {/* ── Mobile nav ── */}
-      <MobileTopBar title="Проекты" onMenu={() => setNavOpen(true)} />
+      <MobileTopBar title="Сайты" onMenu={() => setNavOpen(true)} />
       <MobileDrawer open={navOpen} onClose={() => setNavOpen(false)}>
         {sidebarInner}
       </MobileDrawer>
@@ -196,7 +196,7 @@ export default function DashboardPage() {
       <main className="flex-1 overflow-y-auto pt-[57px] md:pt-0">
         {/* Header (desktop) */}
         <div className="hidden md:flex sticky top-0 bg-surface border-b border-border px-8 items-center h-[57px] z-10">
-          <h1 className="text-base font-semibold text-text-main">Проекты</h1>
+          <h1 className="text-base font-semibold text-text-main">Сайты</h1>
         </div>
 
         <div className="px-4 md:px-8 py-6">
@@ -211,13 +211,13 @@ export default function DashboardPage() {
                   <circle cx="10" cy="7" r="1.5" fill="#d1d5db"/>
                 </svg>
               </div>
-              <h2 className="text-lg font-semibold text-text-main mb-2">Пока нет проектов</h2>
-              <p className="text-sm text-text-muted mb-6">Создайте первый проект — подключите сайт и начните редактировать с помощью ИИ</p>
+              <h2 className="text-lg font-semibold text-text-main mb-2">Пока нет сайтов</h2>
+              <p className="text-sm text-text-muted mb-6">Подключите первый сайт и начните редактировать его с помощью ИИ</p>
               <button
                 onClick={() => router.push("/projects/new")}
                 className="bg-accent hover:bg-accent-hover text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors"
               >
-                Создать первый проект
+                Подключить первый сайт
               </button>
             </div>
           ) : (
@@ -245,7 +245,7 @@ export default function DashboardPage() {
                             setOpenMenuId(isMenuOpen ? null : s.id);
                           }}
                           className="text-text-muted hover:text-text-main transition-colors flex-shrink-0 p-0.5 rounded-lg hover:bg-surface-2"
-                          title="Настройки проекта"
+                          title="Настройки сайта"
                         >
                           {deletingId === s.id ? (
                             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="animate-spin">
@@ -292,7 +292,7 @@ export default function DashboardPage() {
                       >
                         <button
                           onClick={() => {
-                            if (confirm(`Удалить проект «${s.name}»?`)) {
+                            if (confirm(`Удалить сайт «${s.name}»?`)) {
                               deleteSite(s.id);
                             }
                           }}
@@ -317,7 +317,7 @@ export default function DashboardPage() {
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="mb-2">
                   <path d="M10 3V17M3 10H17" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
                 </svg>
-                <span className="text-sm font-medium">Добавить проект</span>
+                <span className="text-sm font-medium">Добавить сайт</span>
               </button>
             </div>
           )}

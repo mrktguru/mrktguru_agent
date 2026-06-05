@@ -13,15 +13,8 @@ from app.core.config import settings
 from app.core.database import SyncSessionLocal
 from app.services.claude.prompts import (
     AGENT_SYSTEM,
-    AUTO_FIX_SYSTEM,
-    CODE_GENERATOR_SYSTEM,
     ESTIMATOR_SYSTEM,
     EXECUTOR_SYSTEM,
-    MOCKUP_SYSTEM,
-    PHASE_1_SYSTEM,
-    PHASE_2_SYSTEM,
-    PHASE_3_SYSTEM,
-    PHASE_4_SYSTEM,
     TASK_AUTO_FIX_SYSTEM,
     TRIAGE_ROUTER_SYSTEM,
     INTEGRATION_AGENT_SYSTEM,
@@ -76,11 +69,6 @@ LAYER_DEFAULTS: dict[str, LayerDefault] = {
         description="Планирует и применяет изменения файлов сайта по SSH.",
         product="sitedoc", model=_SONNET, system_prompt=EXECUTOR_SYSTEM, max_tokens=4096,
     ),
-    "auto_fix": LayerDefault(
-        name="Авто-фикс деплоя",
-        description="Предлагает shell-команды для исправления упавшего шага деплоя.",
-        product="deploy", model=_HAIKU, system_prompt=AUTO_FIX_SYSTEM, max_tokens=1024,
-    ),
     "task_auto_fix": LayerDefault(
         name="Авто-фикс задач (самовосстановление)",
         description="Анализирует ошибку выполнения подзадачи и предлагает исправление (правки или команды).",
@@ -105,36 +93,6 @@ LAYER_DEFAULTS: dict[str, LayerDefault] = {
         name="Ответчик (info, только чтение)",
         description="Отвечает на вопросы о сайте в режиме только-чтение (investigate/question), без правок.",
         product="sitedoc", model=_SONNET, system_prompt=ANSWERER_SYSTEM, max_tokens=4096,
-    ),
-    "code_gen": LayerDefault(
-        name="Генерация кода",
-        description="Превращает спецификацию проекта в набор файлов (Docker).",
-        product="appforge", model=_OPUS, system_prompt=CODE_GENERATOR_SYSTEM, max_tokens=8192,
-    ),
-    "mockup": LayerDefault(
-        name="Генерация HTML-макета",
-        description="Создаёт интерактивный HTML-прототип продукта.",
-        product="appforge", model=_SONNET, system_prompt=MOCKUP_SYSTEM, max_tokens=8000,
-    ),
-    "phase_1": LayerDefault(
-        name="Фаза 1 — Идея",
-        description="Онбординг: понять пользователя, проблему, тип проекта.",
-        product="appforge", model=_SONNET, system_prompt=PHASE_1_SYSTEM, max_tokens=4096,
-    ),
-    "phase_2": LayerDefault(
-        name="Фаза 2 — Продукт",
-        description="Определение фич MVP с учётом ML-паттернов.",
-        product="appforge", model=_SONNET, system_prompt=PHASE_2_SYSTEM, max_tokens=4096,
-    ),
-    "phase_3": LayerDefault(
-        name="Фаза 3 — Архитектура",
-        description="Проектирование флоу и стека простым языком.",
-        product="appforge", model=_SONNET, system_prompt=PHASE_3_SYSTEM, max_tokens=4096,
-    ),
-    "phase_4": LayerDefault(
-        name="Фаза 4 — Деплой",
-        description="Подтверждение готовности к деплою.",
-        product="appforge", model=_SONNET, system_prompt=PHASE_4_SYSTEM, max_tokens=4096,
     ),
 }
 
