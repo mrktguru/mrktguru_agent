@@ -29,9 +29,17 @@ _SUPPORTED_CMS_RELOAD = {
 
 # Subtask type → specialized agent layer (default: task_agent)
 _TYPE_AGENT_LAYER = {
-    "integration": "integration_agent",
-    "parser": "parser_agent",
-    "new_parser": "parser_agent",
+    "integration":    "integration_agent",
+    "parser":         "parser_agent",
+    "new_parser":     "parser_agent",
+    # WORKFLOWS.md new types
+    "new_bot":        "bot_agent",
+    "ai_assistant":   "ai_assistant_agent",
+    "new_site_mobile":"ai_assistant_agent",  # temp until dedicated mobile_agent
+    "devops":         "devops_agent",
+    "maintenance":    "devops_agent",
+    "security":       "devops_agent",
+    "deploy":         "devops_agent",
 }
 # Types whose tracks run run_command through the ops allowlist
 _OPS_TYPES = {"devops", "maintenance", "security", "deploy", "data_migration"}

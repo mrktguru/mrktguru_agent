@@ -48,6 +48,31 @@ PRICING: dict[str, dict[str, float]] = {
 }
 _DEFAULT_MODEL = "claude-sonnet-4-6"
 
+# Base credit estimates by task type (from WORKFLOWS.md Part XI routing table).
+# Used by TaskEstimator as a sanity-check floor/ceiling on total_credits.
+# Format: type → (floor_credits, ceiling_credits).
+BUDGET_BY_TYPE: dict[str, tuple[int, int]] = {
+    "tweak":            (3,   15),
+    "feature":          (10,  40),
+    "module":           (20,  60),
+    "content":          (5,   20),
+    "seo":              (10,  40),
+    "data_migration":   (20,  100),
+    "parser":           (15,  60),
+    "new_parser":       (20,  80),
+    "integration":      (30,  80),
+    "new_site":         (80,  200),
+    "new_site_mobile":  (150, 400),
+    "new_bot":          (60,  150),
+    "ai_assistant":     (100, 300),
+    "bugfix":           (5,   30),
+    "recover":          (5,   20),
+    "devops":           (20,  80),
+    "maintenance":      (10,  40),
+    "security":         (15,  60),
+    "deploy":           (20,  80),
+}
+
 
 def _extract(usage: Any) -> tuple[int, int, int, int]:
     """Normalise an SDK usage object OR a usage dict → (input, output, cache_read, cache_write).

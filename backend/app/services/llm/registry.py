@@ -20,6 +20,12 @@ from app.services.claude.prompts import (
     INTEGRATION_AGENT_SYSTEM,
     PARSER_AGENT_SYSTEM,
     ANSWERER_SYSTEM,
+    # WORKFLOWS.md new agents
+    BOT_AGENT_SYSTEM,
+    DEVOPS_AGENT_SYSTEM,
+    AI_ASSISTANT_AGENT_SYSTEM,
+    SPEC_GENERATOR_SYSTEM,
+    UPSELL_SYSTEM,
 )
 
 
@@ -93,6 +99,33 @@ LAYER_DEFAULTS: dict[str, LayerDefault] = {
         name="Ответчик (info, только чтение)",
         description="Отвечает на вопросы о сайте в режиме только-чтение (investigate/question), без правок.",
         product="sitedoc", model=_SONNET, system_prompt=ANSWERER_SYSTEM, max_tokens=4096,
+    ),
+    # ── WORKFLOWS.md: specialized agents ────────────────────────────────────────
+    "bot_agent": LayerDefault(
+        name="Агент ботов (Telegram/Discord/VK/Slack/WhatsApp)",
+        description="Создаёт ботов: aiogram 3.x, discord.py, vk_api; FSM-состояния, платежи, деплой (systemd/Docker).",
+        product="sitedoc", model=_OPUS, system_prompt=BOT_AGENT_SYSTEM, max_tokens=8192,
+    ),
+    "devops_agent": LayerDefault(
+        name="DevOps-агент (CI/CD / Docker / VPS / nginx / SSL)",
+        description="Инфраструктурные задачи: nginx, certbot, Docker Compose, GitHub Actions, firewall, бэкапы.",
+        product="sitedoc", model=_SONNET, system_prompt=DEVOPS_AGENT_SYSTEM, max_tokens=8192,
+    ),
+    "ai_assistant_agent": LayerDefault(
+        name="AI-агент (RAG / CV / голос / чатбот / агент)",
+        description="Строит AI-продукты: RAG-пайплайн, pgvector/ChromaDB, LangChain, Whisper, ElevenLabs, CV.",
+        product="sitedoc", model=_OPUS, system_prompt=AI_ASSISTANT_AGENT_SYSTEM, max_tokens=8192,
+    ),
+    # ── WORKFLOWS.md: spec + upsell meta-layers ──────────────────────────────────
+    "task_spec": LayerDefault(
+        name="Генератор спецификации задачи (*_SPEC.json)",
+        description="Преобразует тип задачи + Q&A + ТЗ в структурированный JSON-спек для генеративных задач.",
+        product="sitedoc", model=_SONNET, system_prompt=SPEC_GENERATOR_SYSTEM, max_tokens=2048,
+    ),
+    "upsell_generator": LayerDefault(
+        name="Генератор апселла (предложения после задачи)",
+        description="По завершённой задаче генерирует 2–4 конкретных предложения следующих шагов.",
+        product="sitedoc", model=_SONNET, system_prompt=UPSELL_SYSTEM, max_tokens=1024,
     ),
 }
 

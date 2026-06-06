@@ -14,15 +14,38 @@ _OPS_ALLOWLIST = (
     "docker compose", "docker ps", "docker logs", "docker inspect",
     "nginx -t", "nginx -s reload", "nginx -T",
     "systemctl status", "systemctl restart", "systemctl reload",
+    "systemctl enable", "systemctl disable", "systemctl start", "systemctl stop",
+    "journalctl",
     "certbot", "ls", "cat", "grep", "tail", "head", "find", "df", "du",
     "curl", "ping", "dig", "nslookup", "openssl", "ss", "netstat",
     "wp ", "php ", "composer ", "npm run build", "npm ci", "npm install",
+    # DevOps / bot agent additions
+    "git ", "git clone", "git pull", "git status", "git log",
+    "pip ", "pip3 ", "pip install", "pip3 install",
+    "python ", "python3 ",
+    "ufw ", "ufw status", "firewall-cmd",
+    "apt ", "apt-get ", "yum ", "dnf ",
+    "crontab", "crontab -l", "crontab -e",
+    "tar ", "rsync ", "scp ",
+    "mkdir ", "chmod ", "chown ",
+    "ln -s", "ln -sf",
+    "touch ", "cp ", "mv ",
+    "which ", "whoami", "id ", "pwd",
+    "ps aux", "ps -ef", "kill ", "pkill ",
+    "free ", "uptime", "uname ",
+    "wc ", "sort ", "uniq ", "awk ", "sed ",
+    "echo ", "env ", "printenv",
+    "node ", "npm ", "yarn ", "pnpm ",
+    "uvicorn", "gunicorn",
 )
 
 # Never allowed, even for ops (destructive / irreversible without explicit human action).
 _DENYLIST_RE = re.compile(
-    r"\brm\s+-rf\s+/(?:\s|$)|\bmkfs|\bdd\s+if=|:\(\)\s*\{|>\s*/dev/sd|"
-    r"\bdrop\s+database\b|\btruncate\b|\bgit\s+push\s+--force",
+    r"\brm\s+-rf\s+/(?:\s|$)"
+    r"|\brm\s+-rf\s+~"
+    r"|\brm\s+-rf\s+/home"
+    r"|\bmkfs|\bdd\s+if=|:\(\)\s*\{|>\s*/dev/sd"
+    r"|\bdrop\s+database\b|\btruncate\b|\bgit\s+push\s+--force",
     re.IGNORECASE,
 )
 

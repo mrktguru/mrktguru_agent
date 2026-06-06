@@ -69,6 +69,10 @@ def run_execute(self, task_id: str) -> dict:
             ssh.connect()
             executor = TaskExecutor(db, site, task, ssh, log_callback=_log)
             executor.execute()
+            # Trigger upsell suggestions generation (fire-and-forget) for done tasks
+            if task.status == "done":
+                from app.tasks.upsell import generate_upsell
+                generate_upsell.delay(str(task.id))
         except Exception as exc:
             task.status = "failed"
             task.error_message = str(exc)

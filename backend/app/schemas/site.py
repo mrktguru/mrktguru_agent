@@ -153,6 +153,20 @@ class ClarifyRequest(BaseModel):
     answers: str
 
 
+# ── WORKFLOWS.md: spec generation ────────────────────────────────────────────
+
+class SpecifyingResponse(BaseModel):
+    task_id: str
+    status: str = "specifying"
+    spec: dict
+    spec_type: str  # new_bot | new_site | ai_assistant | new_parser | new_site_mobile
+
+
+class ConfirmSpecRequest(BaseModel):
+    # Optionally patch individual spec fields before confirming
+    spec_overrides: dict | None = None
+
+
 class TaskPublic(BaseModel):
     id: str
     site_id: str
@@ -183,6 +197,9 @@ class TaskPublic(BaseModel):
     reserved_credits: float | None = None
     overage_amount: float | None = None
     settled_at: datetime | None = None
+    # WORKFLOWS.md: spec + upsell
+    spec: dict | None = None
+    upsell: list[dict] | None = None
 
     model_config = {"from_attributes": True}
 
@@ -216,6 +233,8 @@ class TaskPublic(BaseModel):
             reserved_credits=getattr(t, "reserved_credits", None),
             overage_amount=getattr(t, "overage_amount", None),
             settled_at=getattr(t, "settled_at", None),
+            spec=getattr(t, "spec", None),
+            upsell=getattr(t, "upsell", None),
         )
 
 

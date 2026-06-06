@@ -73,3 +73,9 @@ class Task(UUIDMixin, TimestampMixin, Base):
 
     # True after a successful run while file backups still exist (enables manual rollback).
     backup_available: Mapped[bool] = mapped_column(default=False, nullable=False)
+
+    # ── WORKFLOWS.md: spec + upsell ───────────────────────────────────────────
+    # Typed *_SPEC.json artifact generated before estimation for generative tasks
+    spec: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Upsell suggestions generated after settlement: [{title, description, type, est_credits}]
+    upsell: Mapped[list | None] = mapped_column(JSONB, nullable=True)

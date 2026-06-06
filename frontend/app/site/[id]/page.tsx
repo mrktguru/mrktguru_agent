@@ -54,6 +54,10 @@ type Clarification = {
   summary: string; questions: string[];
 };
 
+type SpecifyingResp = { task_id: string; status: "specifying"; spec: Record<string, unknown>; spec_type: string };
+
+type UpsellItem = { title: string; description: string; type: string; est_credits: number };
+
 // TaskPublic from the backend (used to rebuild the thread after a refresh)
 type Task = {
   id: string; site_id: string; title: string | null; tz_text: string | null;
@@ -67,6 +71,8 @@ type Task = {
   backup_available: boolean; created_at: string;
   intent?: string | null; type?: string | null;
   tracks?: Track[] | null; pending_input?: PendingInput | null; answer_text?: string | null;
+  spec?: Record<string, unknown> | null;
+  upsell?: UpsellItem[] | null;
 };
 
 type LogLine = {
@@ -80,13 +86,14 @@ type MsgAnalyzing = { kind: "analyzing" };
 type MsgClarify = { kind: "clarify"; data: Clarification };
 type MsgEstimate = { kind: "estimate"; data: TaskEstimate; subtasks: Subtask[] };
 type MsgRunning = { kind: "running"; taskId: string; backupAvailable?: boolean; isRollback?: boolean };
-type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null; estimated?: number | null; actual?: number | null; reserved?: number | null };
+type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null; estimated?: number | null; actual?: number | null; reserved?: number | null; upsell?: UpsellItem[] | null };
 type MsgError = { kind: "error"; text: string };
 type MsgInputRequest = { kind: "input_request"; taskId: string; data: PendingInput };
 type MsgAnswered = { kind: "answered"; taskId: string; answer: string };
 type MsgRejected = { kind: "rejected"; text: string };
+type MsgSpecifying = { kind: "specifying"; taskId: string; spec: Record<string, unknown>; specType: string };
 
-type ChatMsg = MsgUser | MsgAnalyzing | MsgClarify | MsgEstimate | MsgRunning | MsgDone | MsgError | MsgInputRequest | MsgAnswered | MsgRejected;
+type ChatMsg = MsgUser | MsgAnalyzing | MsgClarify | MsgEstimate | MsgRunning | MsgDone | MsgError | MsgInputRequest | MsgAnswered | MsgRejected | MsgSpecifying;
 
 type Tab = "tasks" | "audit" | "history";
 const RISK = { low: "bg-emerald-50 text-emerald-700 border-emerald-100", medium: "bg-amber-50 text-amber-700 border-amber-100", high: "bg-red-50 text-red-700 border-red-100" };
@@ -631,6 +638,11 @@ export default function SitePage() {
         case "rolling_back":
           out.push({ kind: "running", taskId: t.id, backupAvailable: t.backup_available, isRollback: t.status === "rolling_back" });
           break;
+        case "specifying":
+          if (t.spec) {
+            out.push({ kind: "specifying", taskId: t.id, spec: t.spec, specType: t.type || "unknown" });
+          }
+          break;
         case "done":
         case "failed":
         case "stalled":
@@ -638,6 +650,7 @@ export default function SitePage() {
             kind: "done", status: t.status, taskId: t.id, logs: null,
             backupAvailable: t.backup_available, errorMessage: t.error_message,
             estimated: t.estimated_credits, actual: t.actual_credits, reserved: t.reserved_credits,
+            upsell: t.upsell,
           });
           break;
         case "rolled_back":
@@ -725,6 +738,10 @@ export default function SitePage() {
         setPendingClarify(null);
       } else if ((data as any).status === "answered") {
         replaceLast({ kind: "answered", taskId: (data as any).task_id, answer: (data as any).answer });
+        setPendingClarify(null);
+      } else if ((data as any).status === "specifying") {
+        const sp = data as SpecifyingResp;
+        replaceLast({ kind: "specifying", taskId: sp.task_id, spec: sp.spec, specType: sp.spec_type });
         setPendingClarify(null);
       } else if ((data as Clarification).status === "needs_clarification") {
         const cl = data as Clarification;
@@ -858,6 +875,18 @@ export default function SitePage() {
             ));
           })
           .catch(() => {});
+        // Upsell: Celery worker generates suggestions async — poll after 15 s
+        setTimeout(() => {
+          api.post<{ task_id: string; upsell: UpsellItem[] }>(`/api/sites/${id}/tasks/${taskId}/upsell`)
+            .then(({ data: u }) => {
+              if (u.upsell?.length) {
+                setMessages(prev => prev.map(m =>
+                  m.kind === "done" && m.taskId === taskId ? { ...m, upsell: u.upsell } : m
+                ));
+              }
+            })
+            .catch(() => {});  // silent — upsell is decorative
+        }, 15000);
       } else if (msg.type === "task_paused") {
         // Task suspended at request_user_input → swap the running bubble for an input form
         const data: PendingInput = msg.pending_input || { message: "", required_fields: [] };
@@ -902,6 +931,30 @@ export default function SitePage() {
     } catch (err: any) {
       push({ kind: "error", text: err?.response?.data?.detail || "Ошибка отката" });
     }
+  }
+
+  /* ── Confirm spec (specifying → estimated) ──────────────────────────────── */
+  async function handleConfirmSpec(taskId: string) {
+    if (busy) return;
+    setBusy(true);
+    push({ kind: "analyzing" });
+    try {
+      const { data } = await api.post<TaskEstimate | Clarification>(
+        `/api/sites/${id}/tasks/${taskId}/confirm-spec`,
+        {}
+      );
+      if ((data as Clarification).status === "needs_clarification") {
+        const cl = data as Clarification;
+        replaceLast({ kind: "clarify", data: cl });
+        setPendingClarify({ taskId: cl.task_id });
+      } else {
+        const est = data as TaskEstimate;
+        replaceLast({ kind: "estimate", data: est, subtasks: est.subtasks.map(s => ({ ...s, enabled: true })) });
+        setPendingClarify(null);
+      }
+    } catch (err: any) {
+      replaceLast({ kind: "error", text: err?.response?.data?.detail || "Ошибка подтверждения" });
+    } finally { setBusy(false); inputRef.current?.focus(); }
   }
 
   /* ── File ───────────────────────────────────────────────────────────────── */
@@ -1126,6 +1179,17 @@ export default function SitePage() {
                     />
                   )}
 
+                  {/* Specifying — show spec card for confirmation */}
+                  {msg.kind === "specifying" && (
+                    <SpecCard
+                      taskId={msg.taskId}
+                      spec={msg.spec}
+                      specType={msg.specType}
+                      busy={busy}
+                      onConfirm={handleConfirmSpec}
+                    />
+                  )}
+
                   {/* Estimate */}
                   {msg.kind === "estimate" && (
                     <EstimateMsg
@@ -1177,6 +1241,15 @@ export default function SitePage() {
                             <span className="text-emerald-600">возвращено {Math.round(msg.reserved - msg.actual)} кр.</span>
                           )}
                         </div>
+                      )}
+                      {msg.status === "done" && msg.upsell && msg.upsell.length > 0 && (
+                        <UpsellCard
+                          items={msg.upsell}
+                          onSelect={(item) => {
+                            setInput(`${item.title}\n\n${item.description}`);
+                            setTimeout(() => inputRef.current?.focus(), 50);
+                          }}
+                        />
                       )}
                     </AgentBubble>
                   )}
@@ -1478,5 +1551,94 @@ function EstimateMsg({ msgIdx, est, subtasks, busy, available, onToggle, onAppro
         )}
       </div>
     </AgentBubble>
+  );
+}
+
+/* ─── Spec card (generated spec for generative task types) ───────────────── */
+function SpecCard({ taskId, spec, specType, busy, onConfirm }: {
+  taskId: string; spec: Record<string, unknown>; specType: string;
+  busy: boolean; onConfirm: (taskId: string) => void;
+}) {
+  const TYPE_LABELS: Record<string, string> = {
+    new_bot: "Telegram / Discord бот",
+    new_site: "Новый сайт",
+    ai_assistant: "AI-ассистент / RAG",
+    new_parser: "Парсер данных",
+    new_site_mobile: "Мобильное приложение",
+  };
+  const label = TYPE_LABELS[specType] || specType;
+
+  return (
+    <AgentBubble label="SiteDoc AI — спецификация задачи">
+      <p className="text-sm text-text-main mb-3">
+        Я проанализировал задачу и составил <strong>спецификацию</strong>. Проверьте детали и подтвердите:
+      </p>
+      <span className="inline-block text-xs bg-blue-50 border border-blue-200 text-blue-700 px-2.5 py-1 rounded-lg font-medium mb-3">
+        {label}
+      </span>
+      <div className="border border-blue-100 rounded-xl overflow-hidden mb-4 bg-white">
+        {Object.entries(spec).map(([key, value]) => {
+          if (value === null || value === undefined || value === "") return null;
+          const displayVal = Array.isArray(value)
+            ? (value as unknown[]).map(v => String(v)).join(", ")
+            : String(value);
+          return (
+            <div key={key} className="flex items-start gap-3 px-3.5 py-2.5 border-b last:border-0 border-blue-50">
+              <span className="text-xs font-medium text-text-sub flex-shrink-0 w-32 capitalize pt-[1px]">
+                {key.replace(/_/g, " ")}
+              </span>
+              <span className="text-xs text-text-main flex-1 leading-relaxed">{displayVal}</span>
+            </div>
+          );
+        })}
+      </div>
+      <button
+        onClick={() => onConfirm(taskId)}
+        disabled={busy}
+        className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-sm font-medium px-5 py-2 rounded-xl transition-colors flex items-center gap-2"
+      >
+        {busy ? (
+          <>
+            <svg className="animate-spin" width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 10"/>
+            </svg>
+            Строю план...
+          </>
+        ) : "Подтвердить → построить план"}
+      </button>
+    </AgentBubble>
+  );
+}
+
+/* ─── Upsell card (follow-up suggestions after task completion) ──────────── */
+function UpsellCard({ items, onSelect }: {
+  items: UpsellItem[];
+  onSelect: (item: UpsellItem) => void;
+}) {
+  return (
+    <div className="mt-3 border border-amber-200 rounded-2xl bg-amber-50/40 px-4 py-3">
+      <p className="text-xs font-semibold text-amber-700 mb-2.5 flex items-center gap-1.5">
+        <span>✨</span> Можно добавить к проекту
+      </p>
+      <div className="space-y-2">
+        {items.map((item, i) => (
+          <button
+            key={i}
+            onClick={() => onSelect(item)}
+            className="w-full text-left border border-amber-200 bg-white rounded-xl px-3.5 py-2.5 hover:bg-amber-50 hover:border-amber-300 transition-colors group"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-text-main group-hover:text-accent transition-colors">
+                {item.title}
+              </span>
+              <span className="text-xs text-text-muted flex-shrink-0">~{item.est_credits} кр.</span>
+            </div>
+            {item.description && (
+              <p className="text-xs text-text-muted mt-0.5 leading-relaxed">{item.description}</p>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

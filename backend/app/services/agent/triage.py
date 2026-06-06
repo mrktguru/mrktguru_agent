@@ -60,6 +60,7 @@ def _parse(content: str) -> dict:
     return {
         "intent": intent,
         "type": data.get("type"),
+        "task_class": data.get("task_class"),
         "compound": bool(data.get("compound", False)),
         "confidence": data.get("confidence", "medium"),
         "reasoning": data.get("reasoning", ""),
@@ -70,6 +71,6 @@ def _parse(content: str) -> dict:
 
 def _default() -> dict:
     return {
-        "intent": "action", "type": "tweak", "compound": False,
+        "intent": "action", "type": "tweak", "task_class": None, "compound": False,
         "confidence": "low", "reasoning": "triage fallback", "reject": None, "info": None,
     }

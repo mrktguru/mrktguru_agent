@@ -318,7 +318,16 @@ class TaskEstimator:
         return terms[:7] if terms else ["background", "color", "a[^,{]*{"]
 
     def _build_user_message(self) -> str:
-        lines = [f"ТЗ:\n{self._task.tz_text}"]
+        lines = []
+        # Task type hint (from triage) helps the estimator apply type-specific questionnaires
+        if self._task.task_type:
+            lines.append(f"Тип задачи (из триажа): {self._task.task_type}")
+        # Include spec if already generated (confirms the spec to the estimator)
+        spec = getattr(self._task, "spec", None)
+        if spec:
+            import json as _json
+            lines.append(f"Спецификация задачи (подтверждена пользователем):\n{_json.dumps(spec, ensure_ascii=False, indent=2)}")
+        lines.append(f"ТЗ:\n{self._task.tz_text}")
         if self._task.reference_urls:
             lines.append("Референсы (URL): " + ", ".join(self._task.reference_urls))
         if self._task.attachments:
@@ -418,4 +427,22 @@ class TaskEstimator:
         for i, st in enumerate(data.get("subtasks", [])):
             if not st.get("id"):
                 st["id"] = f"st_{i+1}"
+
+        # Sanity-check floor/ceiling by task type (WORKFLOWS.md BUDGET_BY_TYPE)
+        task_type = getattr(self._task, "task_type", None)
+        if task_type:
+            try:
+                from app.services.billing.pricing import BUDGET_BY_TYPE
+                if task_type in BUDGET_BY_TYPE:
+                    floor_cr, ceiling_cr = BUDGET_BY_TYPE[task_type]
+                    total = data.get("total_credits", 0) or 0
+                    if total < floor_cr:
+                        data["total_credits"] = float(floor_cr)
+                        data["_budget_adjusted"] = "floor"
+                    elif total > ceiling_cr * 1.5:
+                        data["total_credits"] = float(ceiling_cr)
+                        data["_budget_adjusted"] = "ceiling"
+            except Exception:
+                pass  # never block estimation
+
         return data

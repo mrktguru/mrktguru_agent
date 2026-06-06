@@ -19,8 +19,8 @@ from app.models.task_log import TaskLog
 from app.models.user import User
 from app.schemas.site import (
     AnswerResponse, ClarificationResponse, ClarifyRequest,
-    RejectResponse, ResumeRequest,
-    SiteCreate, SitePublic, SiteScanResult,
+    ConfirmSpecRequest, RejectResponse, ResumeRequest,
+    SiteCreate, SitePublic, SiteScanResult, SpecifyingResponse,
     TaskCreate, TaskEstimateResponse, TaskPublic, TaskLogPublic,
 )
 from app.services.ssh.client import SSHClient
@@ -240,7 +240,7 @@ async def list_tasks(site_id: str, user: CurrentUser, db: DB) -> list[TaskPublic
 
 
 @router.post("/{site_id}/tasks", status_code=status.HTTP_201_CREATED)
-async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: DB) -> Union[TaskEstimateResponse, ClarificationResponse, RejectResponse, AnswerResponse]:
+async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: DB) -> Union[TaskEstimateResponse, ClarificationResponse, RejectResponse, AnswerResponse, SpecifyingResponse]:
     """Submit a TZ → agent estimates subtasks OR asks clarifying questions."""
     from app.services.agent.task_estimator import TaskEstimator
 
@@ -327,6 +327,33 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
         task.title = (payload.tz_text or "Восстановление")[:80]
         await db.commit()
         return AnswerResponse(task_id=str(task.id), answer=answer)
+
+    # ── Stage 1.5: Spec generation for generative task types ─────────────────
+    # For new_bot / new_site / ai_assistant / new_parser / new_site_mobile with
+    # non-trivial TZ, generate a typed *_SPEC.json and pause for user confirmation.
+    # On any generation error we fall through silently to normal estimation.
+    from app.services.agent.task_spec_generator import TaskSpecGenerator
+    spec_gen = TaskSpecGenerator(task)
+    if spec_gen.should_generate():
+        if ssh_client:
+            try:
+                ssh_client.close()
+            except Exception:
+                pass
+        try:
+            spec = await spec_gen.generate()
+            task.spec = spec
+            task.status = "specifying"
+            await db.commit()
+            return SpecifyingResponse(
+                task_id=str(task.id),
+                status="specifying",
+                spec=spec,
+                spec_type=task.task_type or "unknown",
+            )
+        except Exception:
+            # Spec generation failed — fall through to normal estimation path
+            pass
 
     # Fetch recent completed tasks so the estimator can understand follow-up messages
     # (e.g. "the changes didn't apply" → agent sees what files were changed last time)
@@ -595,3 +622,115 @@ async def resume_task(
 
     run_execute.delay(str(task.id))
     return TaskPublic.from_task(task)
+
+
+# ── WORKFLOWS.md: spec confirmation + upsell ─────────────────────────────────
+
+@router.post("/{site_id}/tasks/{task_id}/confirm-spec", status_code=status.HTTP_200_OK)
+async def confirm_spec(
+    site_id: str,
+    task_id: str,
+    payload: ConfirmSpecRequest,
+    user: CurrentUser,
+    db: DB,
+) -> Union[TaskEstimateResponse, ClarificationResponse]:
+    """User confirms the generated spec (or patches it) → run estimation with spec in context."""
+    from app.services.agent.task_estimator import TaskEstimator
+
+    site = await _get_site_or_404(site_id, user.id, db)
+    task = await db.get(Task, task_id)
+    if not task or task.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "specifying":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task is not in specifying state (current: {task.status})",
+        )
+
+    # Optionally patch spec fields before estimation
+    if payload.spec_overrides and task.spec:
+        task.spec = {**task.spec, **payload.spec_overrides}
+        await db.commit()
+
+    # Fetch recent completed tasks for context (same as in create_task)
+    from sqlalchemy import select as sa_select
+    prev_tasks = list(reversed((await db.scalars(
+        sa_select(Task)
+        .where(
+            Task.site_id == uuid.UUID(site_id),
+            Task.id != task.id,
+            Task.status.in_(["done", "failed", "rolled_back"]),
+        )
+        .order_by(Task.created_at.desc())
+        .limit(5)
+    )).all()))
+
+    try:
+        estimator = TaskEstimator(site, task, previous_tasks=prev_tasks)
+        estimate = await estimator.estimate()
+    except Exception as exc:
+        task.status = "failed"
+        task.error_message = str(exc)
+        await db.commit()
+        raise HTTPException(status_code=500, detail=f"Estimation failed: {exc}") from exc
+
+    if estimate.get("status") == "needs_clarification":
+        questions = estimate.get("questions", [])
+        task.status = "clarifying"
+        task.error_message = "\n".join(questions)
+        task.clarify_qa = [{"questions": questions, "answer": None}]
+        await db.commit()
+        return ClarificationResponse(
+            task_id=str(task.id),
+            status="needs_clarification",
+            summary=estimate.get("summary", ""),
+            questions=questions,
+        )
+
+    task.title = estimate.get("title", (task.tz_text or "Задача")[:80])
+    task.subtasks = estimate.get("subtasks", [])
+    task.tracks = estimate.get("tracks")
+    task.estimated_credits = estimate.get("total_credits", 0)
+    task.estimated_minutes = estimate.get("estimated_minutes", 10)
+    task.confidence = estimate.get("confidence", "medium")
+    task.status = "estimated"
+    await db.commit()
+
+    return TaskEstimateResponse(
+        task_id=str(task.id),
+        subtasks=estimate.get("subtasks", []),
+        total_credits=estimate.get("total_credits", 0),
+        confidence=estimate.get("confidence", "medium"),
+        estimated_minutes=estimate.get("estimated_minutes", 10),
+        tracks=estimate.get("tracks"),
+        intent=task.intent,
+        type=task.task_type,
+    )
+
+
+@router.post("/{site_id}/tasks/{task_id}/upsell", status_code=status.HTTP_200_OK)
+async def get_or_generate_upsell(
+    site_id: str,
+    task_id: str,
+    user: CurrentUser,
+    db: DB,
+) -> dict:
+    """Return upsell suggestions for a completed task (generates synchronously if not yet cached)."""
+    await _get_site_or_404(site_id, user.id, db)
+    task = await db.get(Task, task_id)
+    if not task or task.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "done":
+        raise HTTPException(status_code=400, detail="Upsell доступен только для завершённых задач")
+
+    # Return cached suggestions immediately
+    if task.upsell:
+        return {"task_id": str(task.id), "upsell": task.upsell}
+
+    # Async worker hasn't finished yet — generate synchronously on demand
+    from app.tasks.upsell import _generate
+    upsell = _generate(task)
+    if upsell:
+        task.upsell = upsell
+        await db.commit()
+    return {"task_id": str(task.id), "upsell": upsell or []}
