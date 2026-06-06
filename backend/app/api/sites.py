@@ -16,6 +16,7 @@ from app.models.server import Server
 from app.models.site import Site
 from app.models.task import Task
 from app.models.task_log import TaskLog
+from app.models.user import User
 from app.schemas.site import (
     AnswerResponse, ClarificationResponse, ClarifyRequest,
     RejectResponse, ResumeRequest,
@@ -480,6 +481,23 @@ async def approve_task(
         task.subtasks = [s for s in task.subtasks if s.get("id") in enabled_subtask_ids]
         task.estimated_credits = sum(s.get("estimated_credits", 0) for s in task.subtasks)
 
+    # Two-phase billing: reserve estimate×1.3 and freeze it (CREDIT_MECHANICS.md §5).
+    reserved = round((task.estimated_credits or 0) * 1.3)
+    if reserved > 0:
+        # Lock the balance row so concurrent approvals can't over-commit.
+        user_row = (
+            await db.execute(select(User).where(User.id == user.id).with_for_update())
+        ).scalar_one()
+        available = (user_row.token_credits or 0) - (user_row.frozen_credits or 0)
+        if available < reserved:
+            raise HTTPException(
+                status_code=402,
+                detail={"reason": "insufficient_credits", "available": available, "reserved": reserved},
+            )
+        user_row.frozen_credits = (user_row.frozen_credits or 0) + reserved
+        task.reserved_credits = reserved
+        task.complexity = task.complexity or "unknown"
+
     task.status = "approved"
     await db.commit()
 
@@ -493,7 +511,10 @@ async def approve_task(
 async def get_task_logs(site_id: str, task_id: str, user: CurrentUser, db: DB) -> list[TaskLogPublic]:
     await _get_site_or_404(site_id, user.id, db)
     rows = (await db.scalars(
-        select(TaskLog).where(TaskLog.task_id == uuid.UUID(task_id)).order_by(TaskLog.created_at)
+        select(TaskLog)
+        .where(TaskLog.task_id == uuid.UUID(task_id))
+        .where(TaskLog.step.is_distinct_from("meter"))  # hide per-step billing rows
+        .order_by(TaskLog.created_at)
     )).all()
     return [TaskLogPublic.model_validate(r.__dict__) for r in rows]
 
@@ -543,11 +564,32 @@ async def resume_task(
     if task.status != "waiting_for_user":
         raise HTTPException(status_code=400, detail=f"Задача не на паузе (статус: {task.status})")
 
+    pending = dict(task.pending_input or {})
+
+    # Budget-overage pause → top up the reserve before resuming (CREDIT_MECHANICS.md §6).
+    if pending.get("kind") == "budget_overage":
+        extra = round(payload.extra_reserve or pending.get("requested_extra") or 0)
+        if extra <= 0:
+            raise HTTPException(status_code=400, detail="Не указан размер доплаты (extra_reserve)")
+        user_row = (
+            await db.execute(select(User).where(User.id == user.id).with_for_update())
+        ).scalar_one()
+        available = (user_row.token_credits or 0) - (user_row.frozen_credits or 0)
+        if available < extra:
+            raise HTTPException(
+                status_code=402,
+                detail={"reason": "insufficient_credits", "available": available, "reserved": extra},
+            )
+        user_row.frozen_credits = (user_row.frozen_credits or 0) + extra
+        task.reserved_credits = (task.reserved_credits or 0) + extra
+        task.overage_approved = True
+
     state = dict(task.agent_state or {})
     resume = dict(state.get("resume") or {})
     resume["provided_fields"] = payload.provided_fields
     state["resume"] = resume
     task.agent_state = state
+    task.pending_input = None
     task.status = "approved"
     await db.commit()
 

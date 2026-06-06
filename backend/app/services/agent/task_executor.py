@@ -7,11 +7,15 @@ import shlex
 import uuid
 from typing import Callable
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.site import Site
 from app.models.task import Task
 from app.models.task_log import TaskLog
+from app.services.billing.budget import BudgetGuard, BudgetStatus
+from app.services.billing.pricing import _extract as _split_usage
+from app.services.billing.pricing import cost_usd, credits_to_charge
 from app.services.claude.client import ClaudeClient
 from app.services.llm.registry import resolve
 from app.services.ssh.backup import BackupManager
@@ -32,16 +36,34 @@ _TYPE_AGENT_LAYER = {
 # Types whose tracks run run_command through the ops allowlist
 _OPS_TYPES = {"devops", "maintenance", "security", "deploy", "data_migration"}
 
+# Runaway ceiling for tasks that have no reserve set (legacy/un-billed tasks):
+# BudgetGuard hard-stops at 3× this, ≈ the old flat token budget's intent.
+_FALLBACK_RESERVED_CREDITS = 1000.0
+
 
 class PauseSignal(Exception):
     """Raised when the agent calls request_user_input — suspends the whole task.
 
     Carries everything needed to set status=waiting_for_user and resume later.
+    Also reused for budget-overage pauses (pending_input["kind"]="budget_overage").
     """
     def __init__(self, pending_input: dict, resume_state: dict) -> None:
         super().__init__(pending_input.get("message", "waiting for user"))
         self.pending_input = pending_input
         self.resume_state = resume_state
+
+
+class BudgetHardStop(Exception):
+    """Raised when spend exceeds 3× the reserve — runaway protection.
+
+    Suspends the whole task as `stalled`; the reserve is unfrozen and nothing is
+    charged. Carries the serialized thread for post-mortem inspection.
+    """
+    def __init__(self, resume_state: dict, spent: float, reserved: float) -> None:
+        super().__init__(f"budget hard stop: spent {spent} > 3× reserve {reserved}")
+        self.resume_state = resume_state
+        self.spent = spent
+        self.reserved = reserved
 
 
 class TaskExecutor:
@@ -65,7 +87,10 @@ class TaskExecutor:
         self._last_verify_output: str = ""
         self._verify_markers: list[str] = []
         self._recent_edits: list[str] = []
-        self._tokens_used: int = 0  # accumulated across the whole task (→ actual_credits)
+        self._tokens_used: int = 0       # input+output across the whole task (compat / admin stats)
+        self._cost_usd: float = 0.0      # internal USD across the whole task
+        self._spent_credits: float = 0.0 # client credits (markup applied) → actual_credits
+        self._guard: BudgetGuard | None = None  # set in execute(); shared across subtasks
 
     def execute(self) -> None:
         """Execute all approved subtasks sequentially.
@@ -97,6 +122,21 @@ class TaskExecutor:
             self._task.pending_input = None
             self._db.commit()
 
+        # Budget guard (client credits) — reserve from approve, fallback for legacy tasks.
+        reserved = (
+            self._task.reserved_credits
+            or round((self._task.estimated_credits or 0) * 1.3)
+            or _FALLBACK_RESERVED_CREDITS
+        )
+        # On resume, restore prior spend from already-written meter rows.
+        spent0 = float(self._db.scalar(
+            select(func.coalesce(func.sum(TaskLog.credits), 0.0)).where(
+                TaskLog.task_id == self._task.id
+            )
+        ) or 0.0)
+        self._spent_credits = spent0
+        self._guard = BudgetGuard(reserved, spent=spent0)
+
         for idx in range(start_idx, len(enabled)):
             subtask = enabled[idx]
             self._log(f"━━━ Задача {idx+1}/{len(enabled)}: {subtask['title']} ━━━", "running", idx)
@@ -124,6 +164,25 @@ class TaskExecutor:
                 self._db.commit()
                 self._log(f"⏸ Жду данные от пользователя: {pause.pending_input.get('message','')[:160]}", "running", idx)
                 return  # stop cleanly; /resume re-enqueues run_execute
+            except BudgetHardStop as stop:
+                # Runaway protection: suspend as `stalled`, unfreeze, charge nothing.
+                from app.services.billing.settlement import settle
+                self._backup.finalize_subtask_backup(str(self._task.id), idx)
+                self._task.changed_files = list(set(changed_files))
+                self._task.file_diffs = self._file_diffs or None
+                self._task.agent_state = {
+                    "idx": idx, "changed_files": changed_files,
+                    "file_diffs": self._file_diffs, "resume": stop.resume_state,
+                }
+                self._task.status = "stalled"
+                self._task.backup_available = self._backup.has_backups(str(self._task.id))
+                settle(self._db, self._task, spent_credits=self._spent_credits, status="stalled")
+                self._db.commit()
+                self._log(
+                    f"🛑 Превышен лимит бюджета (×3 резерва): потрачено {stop.spent:.0f} кр. "
+                    "Задача остановлена, резерв разморожен.", "error", idx,
+                )
+                return
             except Exception as exc:
                 self._log(f"✗ Ошибка: {exc}", "error", idx)
                 self._log(f"↩ Откатываю изменения подзадачи {idx+1}...", "running", idx)
@@ -137,9 +196,10 @@ class TaskExecutor:
 
         self._task.changed_files = list(set(changed_files))
         self._task.file_diffs = self._file_diffs or None
-        self._task.status = "done"
-        self._task.actual_credits = round(self._tokens_used / 1000, 1)  # ≈1000 токенов = 1 кредит
         self._task.backup_available = self._backup.has_backups(str(self._task.id))
+        # Settle: charge actual client credits, release the hold, write the ledger.
+        from app.services.billing.settlement import settle
+        settle(self._db, self._task, spent_credits=self._spent_credits, status="done")
         self._db.commit()
 
     def _execute_subtask(self, idx: int, subtask: dict, resume: dict | None = None) -> list[str]:
@@ -159,7 +219,6 @@ class TaskExecutor:
     _AGENT_MAX_STEPS = 30
     _AGENT_MAX_VERIFY_ROUNDS = 3
     _AGENT_THINKING_TOKENS = 4000
-    _AGENT_TOKEN_BUDGET = 500_000   # per-task cap; stops a runaway loop
     _COMPACT_AFTER_MSGS = 26        # compact old tool_result bodies past this
 
     @staticmethod
@@ -178,6 +237,77 @@ class TaskExecutor:
                     c = b.get("content")
                     if isinstance(c, str) and len(c) > 200:
                         b["content"] = c[:160] + f" …[свёрнуто {len(c)} симв]"
+
+    def _meter_step(self, usage, model: str, idx: int, step_index: int) -> float:
+        """Record per-step token usage + cost as a hidden `meter` TaskLog row.
+
+        Returns client-facing credits for this step (markup applied) so the caller
+        can charge the BudgetGuard. Cache-aware via pricing._extract."""
+        inp, out, cr, cw = _split_usage(usage)
+        c_usd = cost_usd(usage, model)
+        c_cr = credits_to_charge(usage, model)
+        self._tokens_used += inp + out
+        self._cost_usd += c_usd
+        self._spent_credits += c_cr
+        self._db.add(TaskLog(
+            task_id=self._task.id, subtask_index=idx, step="meter", status="meter",
+            model=model, step_index=step_index,
+            input_tokens=inp, output_tokens=out,
+            cache_read_tokens=cr, cache_write_tokens=cw,
+            tokens_used=float(inp + out), cost_usd=round(c_usd, 6), credits=round(c_cr, 4),
+        ))
+        self._db.commit()
+        return c_cr
+
+    def _budget_gate(self, messages: list[dict], idx: int, verify_rounds: int, subtask: dict) -> None:
+        """Act on the budget ratio at the top of an agent step.
+
+        WARN/COMPRESS → log + compact (non-blocking). PAUSE → raise PauseSignal
+        for overage approval (reuses the pause primitive). HARD_STOP → raise
+        BudgetHardStop (suspend as stalled, unfreeze)."""
+        if self._guard is None:
+            return
+        status = self._guard.status()
+        if status == BudgetStatus.OK:
+            return
+        if status == BudgetStatus.WARN:
+            if not self._guard.warned_70:
+                self._guard.warned_70 = True
+                self._log("⚠ Бюджет задачи израсходован на 70%", "running", idx)
+            return
+        if status == BudgetStatus.COMPRESS:
+            if not self._guard.warned_90:
+                self._guard.warned_90 = True
+                self._log("⚠ Бюджет 90% — сжимаю историю, ускоряюсь", "running", idx)
+            self._compact_history(messages)
+            return
+
+        # PAUSE / HARD_STOP both suspend the whole task with the serialized thread.
+        resume_state = {
+            "messages": self._serialize_messages(messages),
+            "pending_tool_use_id": None,
+            "sibling_results": [],
+            "recent_edits": list(self._recent_edits),
+            "verify_rounds": verify_rounds,
+        }
+        spent = round(self._guard.spent, 1)
+        reserved = round(self._guard.reserved, 1)
+        if status == BudgetStatus.HARD_STOP:
+            raise BudgetHardStop(resume_state, spent, reserved)
+        requested = max(1.0, round(self._guard.reserved * 0.5))
+        pending = {
+            "kind": "budget_overage",
+            "message": (
+                f"Задача оказалась сложнее: израсходован весь резерв ({reserved:.0f} кр.). "
+                f"Чтобы продолжить, нужно ещё ~{requested:.0f} кр."
+            ),
+            "required_fields": [],
+            "spent": spent,
+            "reserved": reserved,
+            "requested_extra": requested,
+            "track_id": subtask.get("track_id"),
+        }
+        raise PauseSignal(pending, resume_state)
 
     def _agent_tools(self) -> list[dict]:
         return [
@@ -339,31 +469,31 @@ class TaskExecutor:
 
         if resume:
             messages = list(resume.get("messages", []))
-            results = list(resume.get("sibling_results", []))
-            provided = resume.get("provided_fields", {}) or {}
-            note = (
-                "Пользователь предоставил данные: " + ", ".join(provided.keys())
-                + ". Они записаны в .env проекта. Продолжай выполнение."
-            ) if provided else "Пользователь подтвердил. Продолжай."
-            results.append({
-                "type": "tool_result",
-                "tool_use_id": resume["pending_tool_use_id"],
-                "content": note,
-            })
-            messages.append({"role": "user", "content": results})
             verify_rounds = resume.get("verify_rounds", 0)
+            pending_tu_id = resume.get("pending_tool_use_id")
+            if pending_tu_id:
+                # request_user_input resume — answer the pending tool with the human's data.
+                results = list(resume.get("sibling_results", []))
+                provided = resume.get("provided_fields", {}) or {}
+                note = (
+                    "Пользователь предоставил данные: " + ", ".join(provided.keys())
+                    + ". Они записаны в .env проекта. Продолжай выполнение."
+                ) if provided else "Пользователь подтвердил. Продолжай."
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": pending_tu_id,
+                    "content": note,
+                })
+                messages.append({"role": "user", "content": results})
+            # else: budget-overage resume — thread already ends on a user turn, just continue.
         else:
             messages = [{"role": "user", "content": self._build_agent_initial(subtask)}]
             verify_rounds = 0
 
         for _step in range(self._AGENT_MAX_STEPS):
-            # Token budget guard — stop a runaway loop before it burns credits
-            if self._tokens_used > self._AGENT_TOKEN_BUDGET:
-                self._log(
-                    f"⚠ Достигнут лимит токенов ({self._tokens_used}), завершаю что есть",
-                    "running", idx,
-                )
-                break
+            # Budget control — ratio of spent vs reserved (client credits).
+            # Checked at the top of the step (thread ends on a user turn → resumable).
+            self._budget_gate(messages, idx, verify_rounds, subtask)
             # Compact old tool_result bodies on long loops to stay within context
             if len(messages) > self._COMPACT_AFTER_MSGS:
                 self._compact_history(messages)
@@ -378,11 +508,11 @@ class TaskExecutor:
                     system, messages, tools, max_tokens=layer.max_tokens, thinking_tokens=0
                 )
 
+            # Meter this step (cost/credits → metering TaskLog row) and charge the guard.
             usage = getattr(resp, "usage", None)
-            if usage is not None:
-                self._tokens_used += (getattr(usage, "input_tokens", 0) or 0) + (
-                    getattr(usage, "output_tokens", 0) or 0
-                )
+            step_credits = self._meter_step(usage, layer.model, idx, _step)
+            if self._guard is not None:
+                self._guard.charge_step(step_credits)
 
             messages.append({"role": "assistant", "content": resp.content})
             for block in resp.content:

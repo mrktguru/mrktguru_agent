@@ -25,6 +25,7 @@ class UserPublic(BaseModel):
     plan: str = "starter"
     token_credits: float = 0.0
     token_credits_monthly: float = 0.0
+    frozen_credits: float = 0.0
     is_admin: bool = False
 
     model_config = {"from_attributes": True}

@@ -73,6 +73,14 @@ def run_execute(self, task_id: str) -> dict:
             task.status = "failed"
             task.error_message = str(exc)
             _log(f"Критическая ошибка: {exc}", "error")
+            # Release the reserve hold; charge nothing on failure (trust).
+            from sqlalchemy import func, select
+
+            from app.services.billing.settlement import settle
+            spent = float(db.scalar(
+                select(func.coalesce(func.sum(TaskLog.credits), 0.0)).where(TaskLog.task_id == task.id)
+            ) or 0.0)
+            settle(db, task, spent_credits=spent, status="failed")
             db.commit()
         finally:
             try:
@@ -124,6 +132,10 @@ def run_rollback(self, task_id: str) -> dict:
             task.status = "rolled_back"
             task.backup_available = False
             _log("↩ Откат завершён", "rollback")
+            # Refund a settled task that the user rolled back.
+            if task.settled_at and task.actual_credits:
+                from app.services.billing.settlement import refund
+                refund(db, task, credits=task.actual_credits, reason="Откат задачи — возврат списания")
             db.commit()
         except Exception as exc:
             # Roll-back failed → keep the task as 'done' so the user can retry.

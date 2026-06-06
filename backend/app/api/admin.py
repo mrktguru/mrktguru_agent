@@ -36,6 +36,13 @@ async def list_models(_: AdminUser) -> dict[str, list[str]]:
 
 # ─── Stats ───────────────────────────────────────────────────────────────────
 
+@router.get("/billing/analytics")
+async def billing_analytics(_: AdminUser, db: DB, days: int = 30) -> dict[str, Any]:
+    """Estimate accuracy (p50/p90/p99), cache-hit rate and unit economics."""
+    from app.services.billing import analytics
+    return await analytics.summary(db, days=days)
+
+
 @router.get("/stats")
 async def stats(_: AdminUser, db: DB) -> dict[str, Any]:
     users = await db.scalar(select(func.count(User.id))) or 0
@@ -223,7 +230,10 @@ async def get_task_dialog(_: AdminUser, task_id: str, db: DB) -> dict[str, Any]:
     site_name = row[1] if row else "—"
 
     logs = list((await db.scalars(
-        select(TaskLog).where(TaskLog.task_id == task.id).order_by(TaskLog.created_at)
+        select(TaskLog)
+        .where(TaskLog.task_id == task.id)
+        .where(TaskLog.step.is_distinct_from("meter"))
+        .order_by(TaskLog.created_at)
     )).all())
 
     turns = _build_dialog(task, logs)
@@ -254,7 +264,10 @@ async def export_task_dialog(_: AdminUser, task_id: str, db: DB) -> PlainTextRes
     site_name = row[1] if row else "—"
 
     logs = list((await db.scalars(
-        select(TaskLog).where(TaskLog.task_id == task.id).order_by(TaskLog.created_at)
+        select(TaskLog)
+        .where(TaskLog.task_id == task.id)
+        .where(TaskLog.step.is_distinct_from("meter"))
+        .order_by(TaskLog.created_at)
     )).all())
 
     turns = _build_dialog(task, logs)

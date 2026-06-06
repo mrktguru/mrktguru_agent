@@ -12,7 +12,7 @@ type Site = {
   uptime_percent: number | null; created_at: string;
 };
 
-type User = { name: string | null; email: string; plan: string; token_credits: number; is_admin?: boolean };
+type User = { name: string | null; email: string; plan: string; token_credits: number; frozen_credits?: number; is_admin?: boolean };
 
 const CMS_BADGE: Record<string, string> = {
   wordpress: "bg-blue-50 text-blue-600 border-blue-100",
@@ -163,7 +163,10 @@ export default function DashboardPage() {
           <div className="border-t border-border px-4 py-3 flex items-center justify-between gap-2">
             <div className="min-w-0">
               <p className="text-xs font-medium text-text-main truncate">{user.name || user.email}</p>
-              <p className="text-xs text-text-muted">{(user.token_credits ?? 0).toFixed(0)} кредитов</p>
+              <p className="text-xs text-text-muted">
+                {((user.token_credits ?? 0) - (user.frozen_credits ?? 0)).toFixed(0)} кредитов
+                {(user.frozen_credits ?? 0) > 0 && <span className="opacity-60"> · {(user.frozen_credits ?? 0).toFixed(0)} в резерве</span>}
+              </p>
             </div>
             <button
               onClick={() => { localStorage.removeItem("token"); router.push("/"); }}

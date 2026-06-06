@@ -654,12 +654,117 @@ function LayerCard({ layer, models, onSaved }: { layer: Layer; models: string[];
 }
 
 /* ─── Billing (placeholder) ──────────────────────────────────────────────── */
+type BillingAnalytics = {
+  days: number;
+  estimate_accuracy: Record<string, any>[];
+  cache_efficiency: Record<string, any>[];
+  unit_economics: Record<string, any>[];
+};
+
 function BillingSection() {
+  const [data, setData] = useState<BillingAnalytics | null>(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    api.get<BillingAnalytics>("/api/admin/billing/analytics?days=30")
+      .then(({ data }) => setData(data)).catch(() => setErr(true));
+  }, []);
+
+  const num = (v: any, d = 0) => (v == null ? "—" : Number(v).toFixed(d));
+
+  if (err) return <p className="text-sm text-text-muted">Не удалось загрузить аналитику.</p>;
+  if (!data) return <p className="text-sm text-text-muted">Загрузка…</p>;
+
   return (
-    <div className="bg-surface rounded-2xl border border-dashed border-border p-12 text-center max-w-md mx-auto">
-      <div className="text-3xl mb-3">💳</div>
-      <p className="text-text-sub font-medium mb-1">Биллинг</p>
-      <p className="text-sm text-text-muted">Раздел оплат появится при подключении платёжной системы.</p>
+    <div className="space-y-6">
+      {/* Estimate accuracy + calibration */}
+      <div>
+        <h3 className="text-sm font-semibold text-text-main mb-2">Точность оценок по типам (30 дней)</h3>
+        <div className="bg-surface rounded-2xl border border-border overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-text-muted border-b border-border">
+              <tr>
+                {["Тип", "Задач", "Сред. факт", "Сред. оценка", "p50", "p90", "p99", "Перерасход %", "BUDGET_BY_TYPE"].map(h => (
+                  <th key={h} className="text-left font-medium px-3 py-2 whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.estimate_accuracy.map((r, i) => (
+                <tr key={i} className="border-b last:border-0 border-border">
+                  <td className="px-3 py-2 font-medium text-text-main">{r.task_type ?? "—"}</td>
+                  <td className="px-3 py-2">{num(r.tasks_count)}</td>
+                  <td className="px-3 py-2">{num(r.avg_actual, 1)}</td>
+                  <td className="px-3 py-2">{num(r.avg_estimate, 1)}</td>
+                  <td className="px-3 py-2">{num(r.p50_actual, 1)}</td>
+                  <td className="px-3 py-2">{num(r.p90_actual, 1)}</td>
+                  <td className="px-3 py-2">{num(r.p99_actual, 1)}</td>
+                  <td className="px-3 py-2">{num(r.overage_rate_pct, 1)}%</td>
+                  <td className="px-3 py-2 font-medium text-accent">{r.suggested_budget ?? "—"}</td>
+                </tr>
+              ))}
+              {data.estimate_accuracy.length === 0 && (
+                <tr><td colSpan={9} className="px-3 py-4 text-center text-text-muted">Нет завершённых задач за период</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-text-muted mt-1.5">Рекомендация калибровки: BUDGET_BY_TYPE = p90 × 1.1 (покрывает 90% задач без доплаты).</p>
+      </div>
+
+      {/* Cache efficiency */}
+      <div>
+        <h3 className="text-sm font-semibold text-text-main mb-2">Эффективность кеша по моделям</h3>
+        <div className="bg-surface rounded-2xl border border-border overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-text-muted border-b border-border">
+              <tr>{["Модель", "Cache-hit %", "Токенов", "Стоимость $", "Кредитов"].map(h => (
+                <th key={h} className="text-left font-medium px-3 py-2 whitespace-nowrap">{h}</th>))}</tr>
+            </thead>
+            <tbody>
+              {data.cache_efficiency.map((r, i) => (
+                <tr key={i} className="border-b last:border-0 border-border">
+                  <td className="px-3 py-2 font-mono text-xs">{r.model ?? "—"}</td>
+                  <td className="px-3 py-2">{num(r.cache_hit_rate_pct, 1)}%</td>
+                  <td className="px-3 py-2">{num(r.total_tokens)}</td>
+                  <td className="px-3 py-2">${num(r.total_cost_usd, 2)}</td>
+                  <td className="px-3 py-2">{num(r.total_credits, 1)}</td>
+                </tr>
+              ))}
+              {data.cache_efficiency.length === 0 && (
+                <tr><td colSpan={5} className="px-3 py-4 text-center text-text-muted">Нет метеринга за период</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Unit economics */}
+      <div>
+        <h3 className="text-sm font-semibold text-text-main mb-2">Unit-экономика</h3>
+        <div className="bg-surface rounded-2xl border border-border overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-text-muted border-b border-border">
+              <tr>{["Тип", "Задач", "Кредитов клиенту", "Себестоимость $", "Маржа ×", "Прибыль $/задача"].map(h => (
+                <th key={h} className="text-left font-medium px-3 py-2 whitespace-nowrap">{h}</th>))}</tr>
+            </thead>
+            <tbody>
+              {data.unit_economics.map((r, i) => (
+                <tr key={i} className="border-b last:border-0 border-border">
+                  <td className="px-3 py-2 font-medium text-text-main">{r.task_type ?? "—"}</td>
+                  <td className="px-3 py-2">{num(r.tasks)}</td>
+                  <td className="px-3 py-2">{num(r.avg_client_credits, 1)}</td>
+                  <td className="px-3 py-2">${num(r.avg_cost_usd, 3)}</td>
+                  <td className="px-3 py-2">{num(r.effective_markup, 1)}×</td>
+                  <td className="px-3 py-2 text-emerald-600">${num(r.avg_gross_profit_usd, 3)}</td>
+                </tr>
+              ))}
+              {data.unit_economics.length === 0 && (
+                <tr><td colSpan={6} className="px-3 py-4 text-center text-text-muted">Нет данных</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

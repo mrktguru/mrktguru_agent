@@ -1,7 +1,7 @@
 """TaskLog model — streaming execution log for a task."""
 import uuid
 
-from sqlalchemy import Float, ForeignKey, String, Text
+from sqlalchemy import Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -23,4 +23,15 @@ class TaskLog(UUIDMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
-    tokens_used: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tokens_used: Mapped[float | None] = mapped_column(Float, nullable=True)  # input+output (compat)
+
+    # ── Per-step metering (CREDIT_MECHANICS.md §9.3) ─────────────────────────
+    # Populated on metering rows written after each agent API call.
+    model: Mapped[str | None] = mapped_column(String, nullable=True)
+    step_index: Mapped[int | None] = mapped_column(Integer, nullable=True)  # agent step within subtask
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_read_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_write_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)      # internal USD
+    credits: Mapped[float | None] = mapped_column(Float, nullable=True)       # client credits (markup applied)

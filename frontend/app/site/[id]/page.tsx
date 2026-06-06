@@ -41,7 +41,11 @@ type TaskEstimate = {
   tracks?: Track[] | null; intent?: string | null; type?: string | null;
 };
 
-type PendingInput = { message: string; required_fields: string[]; track_id?: string | null };
+type PendingInput = {
+  message: string; required_fields: string[]; track_id?: string | null;
+  // Budget-overage pauses (CREDIT_MECHANICS.md §6)
+  kind?: string | null; spent?: number; reserved?: number; requested_extra?: number;
+};
 
 type RejectResp = { task_id: string; status: "rejected"; reason: string; message: string };
 
@@ -55,6 +59,7 @@ type Task = {
   id: string; site_id: string; title: string | null; tz_text: string | null;
   status: string; subtasks: Subtask[] | null;
   estimated_credits: number | null; estimated_minutes: number | null;
+  actual_credits?: number | null; reserved_credits?: number | null;
   confidence: string | null;
   clarify_qa: { questions: string[]; answer: string | null }[] | null;
   changed_files: string[] | null; error_message: string | null;
@@ -75,7 +80,7 @@ type MsgAnalyzing = { kind: "analyzing" };
 type MsgClarify = { kind: "clarify"; data: Clarification };
 type MsgEstimate = { kind: "estimate"; data: TaskEstimate; subtasks: Subtask[] };
 type MsgRunning = { kind: "running"; taskId: string; backupAvailable?: boolean; isRollback?: boolean };
-type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null };
+type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null; estimated?: number | null; actual?: number | null; reserved?: number | null };
 type MsgError = { kind: "error"; text: string };
 type MsgInputRequest = { kind: "input_request"; taskId: string; data: PendingInput };
 type MsgAnswered = { kind: "answered"; taskId: string; answer: string };
@@ -508,6 +513,8 @@ export default function SitePage() {
   // Task paused at request_user_input → render a form to collect required fields
   const [pendingInput, setPendingInput] = useState<{ taskId: string; data: PendingInput } | null>(null);
   const [inputFields, setInputFields] = useState<Record<string, string>>({});
+  // Available credit balance (token_credits − frozen) for the pre-start reserve check.
+  const [available, setAvailable] = useState<number | null>(null);
 
   // Live log state per running task
   const [runningLogs, setRunningLogs] = useState<Record<string, LogLine[]>>({});
@@ -530,7 +537,16 @@ export default function SitePage() {
       const { data } = await api.get<Site>(`/api/sites/${id}`);
       setSite(data);
     } catch { router.push("/dashboard"); return; }
+    refreshBalance();
     await loadHistory();
+  }
+
+  /* ── Available credit balance (token_credits − frozen) ───────────────────── */
+  async function refreshBalance() {
+    try {
+      const { data } = await api.get<{ token_credits: number; frozen_credits: number }>("/api/auth/me");
+      setAvailable((data.token_credits || 0) - (data.frozen_credits || 0));
+    } catch { /* non-blocking */ }
   }
 
   /* ── Re-scan the site to refresh file structure ──────────────────────────── */
@@ -617,7 +633,12 @@ export default function SitePage() {
           break;
         case "done":
         case "failed":
-          out.push({ kind: "done", status: t.status, taskId: t.id, logs: null, backupAvailable: t.backup_available, errorMessage: t.error_message });
+        case "stalled":
+          out.push({
+            kind: "done", status: t.status, taskId: t.id, logs: null,
+            backupAvailable: t.backup_available, errorMessage: t.error_message,
+            estimated: t.estimated_credits, actual: t.actual_credits, reserved: t.reserved_credits,
+          });
           break;
         case "rolled_back":
           out.push({ kind: "done", status: "rolled_back", taskId: t.id, logs: null, backupAvailable: false });
@@ -725,12 +746,18 @@ export default function SitePage() {
   async function handleResume() {
     if (!pendingInput || busy) return;
     const { taskId, data } = pendingInput;
-    const provided: Record<string, string> = {};
-    for (const f of data.required_fields) provided[f] = inputFields[f] || "";
-    push({ kind: "user", text: "✓ Данные предоставлены: " + data.required_fields.join(", ") });
+    const isOverage = data.kind === "budget_overage";
+    const body: { provided_fields: Record<string, string>; extra_reserve?: number } = { provided_fields: {} };
+    if (isOverage) {
+      body.extra_reserve = data.requested_extra;
+      push({ kind: "user", text: `✓ Доплата одобрена: +${Math.round(data.requested_extra || 0)} кр.` });
+    } else {
+      for (const f of data.required_fields) body.provided_fields[f] = inputFields[f] || "";
+      push({ kind: "user", text: "✓ Данные предоставлены: " + data.required_fields.join(", ") });
+    }
     setBusy(true);
     try {
-      await api.post(`/api/sites/${id}/tasks/${taskId}/resume`, { provided_fields: provided });
+      await api.post(`/api/sites/${id}/tasks/${taskId}/resume`, body);
       // Swap the input-request bubble back into a live running stream
       setMessages(prev => prev.map(m =>
         m.kind === "input_request" && m.taskId === taskId ? { kind: "running", taskId } : m
@@ -738,9 +765,15 @@ export default function SitePage() {
       setRunningLogs(p => ({ ...p, [taskId]: [] }));
       setPendingInput(null);
       setInputFields({});
+      refreshBalance();
       startWs(taskId);
     } catch (err: any) {
-      replaceLast({ kind: "error", text: err?.response?.data?.detail || "Не удалось возобновить" });
+      const d = err?.response?.data?.detail;
+      if (err?.response?.status === 402 && d?.reason === "insufficient_credits") {
+        replaceLast({ kind: "error", text: `Недостаточно кредитов для доплаты: нужно ${Math.round(d.reserved)} кр., доступно ${Math.round(d.available)} кр.` });
+      } else {
+        replaceLast({ kind: "error", text: (typeof d === "string" ? d : null) || "Не удалось возобновить" });
+      }
     } finally { setBusy(false); }
   }
 
@@ -766,9 +799,15 @@ export default function SitePage() {
         i === msgIdx ? { kind: "running", taskId: est.task_id, backupAvailable: true } : m
       ));
       setRunningLogs(p => ({ ...p, [est.task_id]: [] }));
+      refreshBalance();  // reserve was frozen
       startWs(est.task_id);
     } catch (err: any) {
-      push({ kind: "error", text: err?.response?.data?.detail || "Ошибка запуска" });
+      const d = err?.response?.data?.detail;
+      if (err?.response?.status === 402 && d?.reason === "insufficient_credits") {
+        push({ kind: "error", text: `Недостаточно кредитов: нужно заморозить ${Math.round(d.reserved)} кр., доступно ${Math.round(d.available)} кр. Пополните баланс.` });
+      } else {
+        push({ kind: "error", text: (typeof d === "string" ? d : null) || "Ошибка запуска" });
+      }
       setBusy(false);
     }
   }
@@ -804,10 +843,20 @@ export default function SitePage() {
         setBusy(false);
         ws.close();
         delete wsRef.current[taskId];
+        refreshBalance();  // balance settled (charge + unfreeze)
         // Refresh only allTasks (for restore-points sidebar) — do NOT call loadHistory()
         // because it resets the messages array and the user loses their current chat thread.
         api.get<Task[]>(`/api/sites/${id}/tasks`)
-          .then(({ data }) => setAllTasks(data))
+          .then(({ data }) => {
+            setAllTasks(data);
+            // Patch the just-finished done bubble with settlement credits.
+            const t = data.find(x => x.id === taskId);
+            if (t) setMessages(prev => prev.map(m =>
+              m.kind === "done" && m.taskId === taskId
+                ? { ...m, estimated: t.estimated_credits, actual: t.actual_credits, reserved: t.reserved_credits }
+                : m
+            ));
+          })
           .catch(() => {});
       } else if (msg.type === "task_paused") {
         // Task suspended at request_user_input → swap the running bubble for an input form
@@ -1084,6 +1133,7 @@ export default function SitePage() {
                       est={msg.data}
                       subtasks={msg.subtasks}
                       busy={busy}
+                      available={available}
                       onToggle={(taskId) => toggleSubtask(idx, taskId)}
                       onApprove={() => handleApprove(idx, msg.data, msg.subtasks)}
                     />
@@ -1104,6 +1154,7 @@ export default function SitePage() {
                     <AgentBubble label={
                       msg.status === "rolled_back" ? "SiteDoc AI — откатено ↩"
                       : msg.status === "done" ? "SiteDoc AI — выполнено ✓"
+                      : msg.status === "stalled" ? "SiteDoc AI — остановлено (лимит бюджета)"
                       : "SiteDoc AI — завершено с ошибками"
                     }>
                       <LogBlock
@@ -1118,6 +1169,15 @@ export default function SitePage() {
                         onRollback={msg.status === "done" && msg.backupAvailable ? () => handleRollback(msg.taskId) : undefined}
                         onNew={() => inputRef.current?.focus()}
                       />
+                      {msg.status === "done" && msg.actual != null && (
+                        <div className="mt-2 text-xs text-text-muted flex flex-wrap gap-x-3 gap-y-0.5">
+                          {msg.estimated != null && <span>Оценка: {Math.round(msg.estimated)} кр.</span>}
+                          <span className="text-text-sub font-medium">Потрачено: {Math.round(msg.actual)} кр.</span>
+                          {msg.reserved != null && msg.reserved > msg.actual && (
+                            <span className="text-emerald-600">возвращено {Math.round(msg.reserved - msg.actual)} кр.</span>
+                          )}
+                        </div>
+                      )}
                     </AgentBubble>
                   )}
 
@@ -1255,6 +1315,32 @@ function InputRequestMsg({ data, active, values, onChange, onSubmit, busy }: {
 }) {
   const isSecret = (f: string) => /secret|token|key|password|pass/i.test(f);
   const allFilled = data.required_fields.every(f => (values[f] || "").trim().length > 0);
+
+  // Budget-overage pause → approve extra credits to continue (CREDIT_MECHANICS.md §7 Б).
+  if (data.kind === "budget_overage") {
+    return (
+      <AgentBubble label="SiteDoc AI — нужна доплата">
+        <p className="text-sm text-text-main whitespace-pre-wrap mb-3">{data.message}</p>
+        <div className="mb-3 rounded-xl bg-amber-50 border border-amber-100 px-3.5 py-2.5 text-xs space-y-1">
+          <div className="flex justify-between"><span className="text-amber-700">Потрачено</span><span className="font-medium text-amber-800">{Math.round(data.spent || 0)} кр.</span></div>
+          <div className="flex justify-between"><span className="text-amber-700">Резерв</span><span className="font-medium text-amber-800">{Math.round(data.reserved || 0)} кр.</span></div>
+          <div className="flex justify-between"><span className="text-amber-700">Нужно дополнительно</span><span className="font-medium text-amber-800">~{Math.round(data.requested_extra || 0)} кр.</span></div>
+        </div>
+        {active ? (
+          <button
+            onClick={onSubmit}
+            disabled={busy}
+            className="bg-accent text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-40"
+          >
+            {busy ? "Продолжаю..." : `▶ Продолжить · +${Math.round(data.requested_extra || 0)} кр.`}
+          </button>
+        ) : (
+          <p className="text-xs text-text-muted">Доплата одобрена, продолжаю…</p>
+        )}
+      </AgentBubble>
+    );
+  }
+
   return (
     <AgentBubble label="SiteDoc AI — нужны данные">
       <p className="text-sm text-text-main whitespace-pre-wrap mb-3">{data.message}</p>
@@ -1289,14 +1375,16 @@ function InputRequestMsg({ data, active, values, onChange, onSubmit, busy }: {
 }
 
 /* ─── Estimate message ────────────────────────────────────────────────────── */
-function EstimateMsg({ msgIdx, est, subtasks, busy, onToggle, onApprove }: {
+function EstimateMsg({ msgIdx, est, subtasks, busy, available, onToggle, onApprove }: {
   msgIdx: number; est: TaskEstimate; subtasks: Subtask[];
-  busy: boolean;
+  busy: boolean; available: number | null;
   onToggle: (id: string) => void;
   onApprove: () => void;
 }) {
   const totalEnabled = subtasks.filter(s => s.enabled).reduce((a, s) => a + s.estimated_credits, 0);
   const enabledCount = subtasks.filter(s => s.enabled).length;
+  const reserved = Math.round(totalEnabled * 1.3);  // +30% buffer frozen on start
+  const insufficient = available !== null && available < reserved;
 
   return (
     <AgentBubble>
@@ -1347,24 +1435,47 @@ function EstimateMsg({ msgIdx, est, subtasks, busy, onToggle, onApprove }: {
         ))}
       </div>
 
+      {/* Reserve + balance (CREDIT_MECHANICS.md §5.3) */}
+      <div className="mb-3 rounded-xl bg-surface-2 border border-border px-3.5 py-2.5 text-xs space-y-1">
+        <div className="flex items-center justify-between">
+          <span className="text-text-muted">Оценка</span>
+          <span className="text-text-main font-medium">~{totalEnabled.toFixed(0)} кр.</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-text-muted">Будет заморожено <span className="opacity-70">(+30% буфер)</span></span>
+          <span className="text-text-main font-medium">{reserved} кр.</span>
+        </div>
+        {available !== null && (
+          <div className="flex items-center justify-between">
+            <span className="text-text-muted">Доступно на балансе</span>
+            <span className={insufficient ? "text-red-600 font-medium" : "text-text-main font-medium"}>{Math.round(available)} кр.</span>
+          </div>
+        )}
+        <p className="text-[10px] text-text-muted pt-0.5">Заморозка — не списание. По факту спишется только потраченное, остаток вернётся.</p>
+      </div>
+
       <div className="flex items-center justify-between">
         <span className="text-xs text-text-muted">
-          {enabledCount} из {subtasks.length} задач · {totalEnabled.toFixed(0)} кредитов
+          {enabledCount} из {subtasks.length} задач
         </span>
-        <button
-          onClick={onApprove}
-          disabled={busy || enabledCount === 0}
-          className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-sm font-medium px-5 py-2 rounded-xl transition-colors flex items-center gap-2"
-        >
-          {busy ? (
-            <>
-              <svg className="animate-spin" width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 10"/>
-              </svg>
-              Запускаю...
-            </>
-          ) : "▶ Запустить"}
-        </button>
+        {insufficient ? (
+          <span className="text-xs text-red-600 font-medium">Недостаточно кредитов — пополните баланс</span>
+        ) : (
+          <button
+            onClick={onApprove}
+            disabled={busy || enabledCount === 0}
+            className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-sm font-medium px-5 py-2 rounded-xl transition-colors flex items-center gap-2"
+          >
+            {busy ? (
+              <>
+                <svg className="animate-spin" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 10"/>
+                </svg>
+                Запускаю...
+              </>
+            ) : "▶ Запустить"}
+          </button>
+        )}
       </div>
     </AgentBubble>
   );

@@ -1,7 +1,8 @@
 """Task model — a TZ (technical specification) submitted by user for a site."""
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -48,8 +49,15 @@ class Task(UUIDMixin, TimestampMixin, Base):
     actual_credits: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[str | None] = mapped_column(String, nullable=True)  # high|medium|low
 
+    # ── Two-phase billing (CREDIT_MECHANICS.md §5) ───────────────────────────
+    reserved_credits: Mapped[float | None] = mapped_column(Float, nullable=True)   # frozen on approve (estimate×1.3)
+    complexity: Mapped[str | None] = mapped_column(String, nullable=True)          # low|medium|high|unknown
+    overage_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    overage_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Status flow: pending → estimated → approved → running → done | failed | rolled_back
-    # plus: clarifying, rolling_back, waiting_for_user, answered, rejected
+    # plus: clarifying, rolling_back, waiting_for_user, answered, rejected, stalled (budget HARD_STOP)
     status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
 
     # Clarification dialog history: [{questions: [...], answer: str}]

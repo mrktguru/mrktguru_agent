@@ -137,7 +137,9 @@ class AnswerResponse(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    provided_fields: dict[str, str]
+    provided_fields: dict[str, str] = {}
+    # For budget-overage pauses: extra credits the user approves to top up the reserve.
+    extra_reserve: float | None = None
 
 
 class ClarificationResponse(BaseModel):
@@ -177,6 +179,10 @@ class TaskPublic(BaseModel):
     triage: dict | None = None
     pending_input: dict | None = None
     answer_text: str | None = None
+    # Billing (CREDIT_MECHANICS.md)
+    reserved_credits: float | None = None
+    overage_amount: float | None = None
+    settled_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -207,6 +213,9 @@ class TaskPublic(BaseModel):
             triage=getattr(t, "triage", None),
             pending_input=getattr(t, "pending_input", None),
             answer_text=getattr(t, "answer_text", None),
+            reserved_credits=getattr(t, "reserved_credits", None),
+            overage_amount=getattr(t, "overage_amount", None),
+            settled_at=getattr(t, "settled_at", None),
         )
 
 

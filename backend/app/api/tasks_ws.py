@@ -14,9 +14,11 @@ from app.models.task_log import TaskLog
 
 ws_router = APIRouter()
 
-TERMINAL = {"done", "failed", "rolled_back", "answered", "rejected"}
+TERMINAL = {"done", "failed", "rolled_back", "answered", "rejected", "stalled"}
 # Non-terminal stop: task suspended waiting for the user to provide input.
 PAUSED = "waiting_for_user"
+# Per-step billing-meter rows are hidden from the human log stream.
+META_STEP = "meter"
 
 
 def _stop_event(task) -> dict:
@@ -57,6 +59,7 @@ async def task_logs_ws(websocket: WebSocket, task_id: str, token: str | None = N
             rows = (await db.scalars(
                 select(TaskLog)
                 .where(TaskLog.task_id == task.id)
+                .where(TaskLog.step.is_distinct_from(META_STEP))
                 .order_by(TaskLog.created_at)
             )).all()
             for row in rows:
@@ -78,6 +81,7 @@ async def task_logs_ws(websocket: WebSocket, task_id: str, token: str | None = N
                 stmt = (
                     select(TaskLog)
                     .where(TaskLog.task_id == task.id)
+                    .where(TaskLog.step.is_distinct_from(META_STEP))
                     .order_by(TaskLog.created_at)
                 )
                 if last_seen_at is not None:

@@ -57,6 +57,7 @@ async def me(user: CurrentUser) -> UserPublic:
         plan=user.plan,
         token_credits=getattr(user, "token_credits", 0.0) or 0.0,
         token_credits_monthly=getattr(user, "token_credits_monthly", 0.0) or 0.0,
+        frozen_credits=getattr(user, "frozen_credits", 0.0) or 0.0,
         is_admin=getattr(user, "is_admin", False),
     )
 
