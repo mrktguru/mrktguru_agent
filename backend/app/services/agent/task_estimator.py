@@ -322,6 +322,10 @@ class TaskEstimator:
         # Task type hint (from triage) helps the estimator apply type-specific questionnaires
         if self._task.task_type:
             lines.append(f"Тип задачи (из триажа): {self._task.task_type}")
+            from app.services.claude.workflows import build_workflow_hint
+            hint = build_workflow_hint(self._task.task_type, self._task.tz_text or "")
+            if hint:
+                lines.append(hint)
         # Include spec if already generated (confirms the spec to the estimator)
         spec = getattr(self._task, "spec", None)
         if spec:

@@ -100,5 +100,9 @@ class TaskSpecGenerator:
                 if answer:
                     parts.append(f"Ответы: {answer}")
 
+        from app.services.claude.workflows import build_spec_hint
+        hint = build_spec_hint(self._task.task_type or "", self._task.tz_text or "")
+        if hint:
+            parts.append(f"Дополнительный контекст по типу:\n{hint}")
         parts.append(f"ТЗ пользователя:\n{self._task.tz_text}")
         return "\n\n".join(parts)

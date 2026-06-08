@@ -170,94 +170,13 @@ ESTIMATOR_SYSTEM = dedent("""\
     }
     Для простых одиночных задач можно вернуть плоский subtasks без tracks (как выше).
 
-    ━━━ ТИП-СПЕЦИФИЧНЫЕ УТОЧНЕНИЯ (WORKFLOWS.md) ━━━
+    ━━━ ТИП-СПЕЦИФИЧНЫЕ УТОЧНЕНИЯ ━━━
 
-    Для разных типов задач задавай ТОЛЬКО специфичные вопросы если они не ясны из ТЗ.
-    НЕ дублируй общие правила уточнений — они действуют всегда.
-
-    new_bot (Telegram/Discord/WhatsApp/Slack/VK):
-    - Уточни ЕСЛИ НЕ ЯСНО: платформа (если вообще не упомянута), основные команды/сценарии,
-      нужна ли встроенная оплата, нужна ли постоянная БД (для состояний FSM).
-    - НЕ спрашивай: язык (всегда Python), фреймворк (aiogram для TG, discord.py, vk_api).
-    - Деплой (systemd/Docker) определи по контексту или укажи оба варианта.
-
-    new_site (лендинг/SPA/магазин/WordPress):
-    - Уточни ЕСЛИ НЕ ЯСНО: технологический стек (если не указан), ключевые секции/страницы,
-      нужна ли форма обратной связи, нужна ли CMS для самостоятельного наполнения.
-    - НЕ спрашивай про хостинг — это отдельная задача devops/deploy.
-
-    ai_assistant (RAG/чатбот/CV/голос/агент):
-    - Уточни ЕСЛИ НЕ ЯСНО: источник данных (файлы/сайт/БД/FAQ), нужен ли голосовой ввод/вывод,
-      предпочтительная LLM-модель (по умолчанию Claude), нужна ли история диалога.
-    - Векторная БД: pgvector если в проекте Postgres, иначе ChromaDB.
-
-    integration:
-    - НЕ спрашивай про секреты — агент запросит их в процессе через request_user_input.
-    - Уточни только callback_url если интеграция его требует, и тестовый/боевой режим.
-
-    devops/deploy:
-    - Уточни ЕСЛИ НЕ ЯСНО: есть ли docker-compose.yml, нужен ли SSL, домен.
-    - Всегда создавай первую подзадачу для бэкапа (risk=high) для опасных операций.
-
-    data_migration:
-    - Уточни: формат источника (CSV/SQL/API), целевая БД, нужен ли rollback-план.
-
-    ━━━ ФАЗОВЫЕ ШАБЛОНЫ ДЛЯ ГЕНЕРАТИВНЫХ ТИПОВ ━━━
-
-    Для new_bot, new_site, new_parser, ai_assistant, new_site_mobile (complexity medium+)
-    разбивай subtasks в порядке фаз генерации из WORKFLOWS.md. Это отправная точка — адаптируй.
-
-    new_bot (Telegram/Discord/WA/Slack/VK):
-    ① Скелет: bot.py, config.py, requirements.txt, базовый /start
-       (пауза на BOT_TOKEN — укажи в description: «Агент запросит BOT_TOKEN от @BotFather»)
-    ② Основной flow: команды, хендлеры (по одной подзадаче на ключевой сценарий)
-    ③ FSM/состояния: FSMContext + State-классы для многошаговых диалогов
-    ④ Платежи/внешние API: если нужны (пауза на API-ключи)
-    ⑤ Хранилище: models.py + БД (SQLite/Postgres), если нужно постоянное состояние
-    ⑥ Деплой: systemd unit или docker-compose
-    ⑦ Верификация: getMe API-вызов, пробный прогон команд
-
-    new_site (лендинг/SPA):
-    ① Скаффолдинг: init-проект, tailwind.config, globals.css
-    ② Layout: Header, Footer, навигация
-    ③ Секции (по одной подзадаче на секцию: Hero, Features, Pricing, CTA...)
-    ④ Формы/интерактивность (если есть)
-    ⑤ Деплой (отдельная задача, только если явно указан хостинг)
-
-    ai_assistant (RAG/чатбот):
-    ① Инфраструктура: векторная БД (pgvector/ChromaDB), эмбеддинг-модель
-    ② Инджестер: загрузка и индексация документов/источников
-    ③ RAG-цепочка: retriever + prompt + LLM (пауза на API-ключ LLM)
-    ④ API/интерфейс: FastAPI эндпоинт или TG-бот (если нужен)
-    ⑤ Тестирование: пробный запрос → непустой результат + ответ
-
-    new_parser:
-    ① Разведка: robots.txt, структура источника, выбор маршрута (API/requests/playwright)
-    ② БД: items, scrape_runs, change_history
-    ③ Scraper: клиент с rate-limit, ретраями, пагинацией
-    ④ Pipeline: нормализация, дедупликация, change_tracker
-    ⑤ Вывод + расписание + уведомления
-    ⑥ Деплой + боевой прогон
-
-    ━━━ ОЖИДАЕМЫЕ ПАУЗЫ ПО ТИПАМ ━━━
-
-    Указывай в description нужной подзадачи, чтобы пользователь заранее знал что потребуется:
-    - integration → «Агент запросит CLIENT_ID и CLIENT_SECRET провайдера»
-    - new_bot (Telegram) → «Агент запросит BOT_TOKEN от @BotFather»
-    - new_bot (Discord) → «Агент запросит DISCORD_BOT_TOKEN и CLIENT_ID»
-    - new_bot (Slack) → «Агент запросит SLACK_BOT_TOKEN и SIGNING_SECRET»
-    - ai_assistant с OpenAI → «Агент запросит OPENAI_API_KEY»
-    - ai_assistant с голосом → «Агент запросит ELEVENLABS_API_KEY»
-    - devops/SSL → «Агент запросит подтверждение домена для certbot»
-    - deploy/CI → «Агент запросит SSH-ключ или токен деплоя»
-
-    ━━━ ОРИЕНТИРОВОЧНЫЕ КРЕДИТЫ ПО ТИПАМ (sanity-check) ━━━
-
-    Используй как проверку — если твоя оценка сильно выходит за диапазон, перепроверь:
-    tweak: 3–15    feature: 10–40   module: 20–60   content: 5–20    seo: 10–40
-    new_site: 80–200  new_bot: 60–150  ai_assistant: 100–300  new_site_mobile: 150–400
-    integration: 30–80  devops: 20–80  maintenance: 10–40  security: 15–60  deploy: 20–80
-    data_migration: 20–100  parser: 15–60  new_parser: 20–80  bugfix: 5–30  recover: 5–20""")
+    Детали по конкретному типу задачи передаются в USER-сообщении (СПЕЦИФИКА ТИПА).
+    Используй их: опросник, фазы разбивки, ключевую паузу.
+    Общие кредитные ориентиры: tweak 3–15, feature 10–40, module 20–60,
+    new_site 80–200, new_bot 60–150, ai_assistant 100–300, integration 30–80,
+    devops 20–80, new_parser 20–80.""")
 
 
 # ── Specialized agent layers (AGENT_ARCHITECTURE.md §5) ──────────────────────
