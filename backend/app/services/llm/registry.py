@@ -26,6 +26,8 @@ from app.services.claude.prompts import (
     AI_ASSISTANT_AGENT_SYSTEM,
     SPEC_GENERATOR_SYSTEM,
     UPSELL_SYSTEM,
+    # SOLUTION_REUSE.md
+    SOLUTION_CHECKER_SYSTEM,
 )
 
 
@@ -126,6 +128,12 @@ LAYER_DEFAULTS: dict[str, LayerDefault] = {
         name="Генератор апселла (предложения после задачи)",
         description="По завершённой задаче генерирует 2–4 конкретных предложения следующих шагов.",
         product="sitedoc", model=_SONNET, system_prompt=UPSELL_SYSTEM, max_tokens=1024,
+    ),
+    # ── SOLUTION_REUSE.md: L2 delta analysis ────────────────────────────────────
+    "solution_checker": LayerDefault(
+        name="Анализ совместимости решения (delta L2)",
+        description="Haiku-вызов: определяет что переиспользовать / адаптировать / написать заново.",
+        product="sitedoc", model=_HAIKU, system_prompt=SOLUTION_CHECKER_SYSTEM, max_tokens=600,
     ),
 }
 

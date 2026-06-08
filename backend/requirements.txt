@@ -21,6 +21,8 @@ cryptography==44.0.0
 # >=0.69 required for adaptive thinking (thinking={"type":"adaptive"}) and the
 # Claude 4.6/4.8 model strings used in the LLM layer registry.
 anthropic>=0.69.0
+# OpenAI embeddings for solution reuse vector search (optional — set OPENAI_API_KEY)
+openai>=1.0.0
 
 # Background tasks
 celery[redis]==5.4.0

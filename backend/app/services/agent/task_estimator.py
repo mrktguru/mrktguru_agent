@@ -331,6 +331,16 @@ class TaskEstimator:
         if spec:
             import json as _json
             lines.append(f"Спецификация задачи (подтверждена пользователем):\n{_json.dumps(spec, ensure_ascii=False, indent=2)}")
+
+        # Solution reuse context: find similar solutions and inject instruction
+        reuse_block = _build_reuse_context(
+            task_type=self._task.task_type or "",
+            tz_text=self._task.tz_text or "",
+            stack=getattr(self._site, "cms", None) or getattr(self._site, "tech_stack", None),
+        )
+        if reuse_block:
+            lines.append(reuse_block)
+
         lines.append(f"ТЗ:\n{self._task.tz_text}")
         if self._task.reference_urls:
             lines.append("Референсы (URL): " + ", ".join(self._task.reference_urls))
@@ -450,3 +460,44 @@ class TaskEstimator:
                 pass  # never block estimation
 
         return data
+
+
+# ── Solution reuse helper (SOLUTION_REUSE.md §VIII) ──────────────────────────
+
+def _build_reuse_context(task_type: str, tz_text: str, stack: str | None) -> str:
+    """Find top similar solution and return a reuse instruction block.
+
+    Returns empty string if no relevant solutions found or DB unavailable.
+    """
+    if not task_type:
+        return ""
+    try:
+        from app.core.database import SyncSessionLocal
+        from app.services.solutions.embed import embed
+        from app.services.solutions.db import search_solutions, rank_candidates
+        from app.services.solutions.checker import run_checker
+
+        embedding = embed(f"{task_type} {tz_text[:400]}")
+
+        with SyncSessionLocal() as db:
+            raw = search_solutions(db, task_type, embedding, limit=10)
+            if not raw:
+                return ""
+            ranked = rank_candidates(raw, task_type, stack)
+            if not ranked:
+                return ""
+
+            top_sol, top_sim = ranked[0]
+            gate, instruction = run_checker(top_sol, task_type, stack, tz_text)
+
+            lines = [
+                "━" * 55,
+                f"ПОХОЖЕЕ РЕШЕНИЕ ИЗ БАЗЫ (схожесть {top_sim:.0%}): {top_sol.title}",
+                f"  Использовалось: {top_sol.reuse_count}× · успех {top_sol.success_rate:.0%}",
+                "─" * 55,
+                instruction,
+                "━" * 55,
+            ]
+            return "\n".join(lines)
+    except Exception:
+        return ""

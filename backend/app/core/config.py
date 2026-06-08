@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = ""  # e.g. https://mrktguru.ru/api/auth/google/callback
 
+    # OpenAI (optional — enables vector embeddings in solution reuse)
+    OPENAI_API_KEY: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

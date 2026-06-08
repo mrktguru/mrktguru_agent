@@ -15,6 +15,11 @@ async def lifespan(app: FastAPI):
         from app.services.llm.registry import seed_layers
         seed_layers()
     except Exception:
+        pass
+    try:
+        from app.services.solutions.seeder import seed_solutions
+        seed_solutions()
+    except Exception:
         pass  # don't block startup if DB not ready
     yield
 

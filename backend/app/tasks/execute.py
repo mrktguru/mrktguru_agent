@@ -73,6 +73,9 @@ def run_execute(self, task_id: str) -> dict:
             if task.status == "done":
                 from app.tasks.upsell import generate_upsell
                 generate_upsell.delay(str(task.id))
+                # Index this task as a reusable solution (best-practice filter applied inside)
+                from app.tasks.index_solution import index_solution_task
+                index_solution_task.delay(str(task.id))
         except Exception as exc:
             task.status = "failed"
             task.error_message = str(exc)

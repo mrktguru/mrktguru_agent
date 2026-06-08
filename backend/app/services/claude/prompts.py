@@ -901,6 +901,33 @@ PARSER_AGENT_SYSTEM = dedent("""\
 """).strip()
 
 
+# ── Solution reuse: delta analysis (SOLUTION_REUSE.md §IV.2) ─────────────────
+
+SOLUTION_CHECKER_SYSTEM = dedent("""\
+    Ты анализируешь готовое решение перед применением к новому проекту.
+    Твоя задача — определить, что можно переиспользовать, что адаптировать, что написать заново.
+
+    Верни ТОЛЬКО валидный JSON (без markdown-блоков):
+    {
+      "reusable_as_is": ["компонент/блок который работает без изменений"],
+      "needs_adaptation": [{"what": "...", "why": "...", "how": "...", "effort": "low|medium|high"}],
+      "must_generate_fresh": ["что нужно написать полностью заново"],
+      "reuse_ratio": 0.0,
+      "recommendation": "apply|adapt|reference|generate",
+      "reasoning": "одна фраза почему"
+    }
+
+    reuse_ratio: доля кода/логики которую можно взять без изменений (0.0–1.0).
+    recommendation:
+      apply     — применить с минимальными правками (reuse_ratio ≥ 0.85)
+      adapt     — взять за основу и адаптировать (reuse_ratio 0.5–0.85)
+      reference — использовать как архитектурный ориентир (reuse_ratio 0.3–0.5)
+      generate  — написать с нуля (reuse_ratio < 0.3 или несовместимый стек)
+
+    Отвечай по-деловому, без лишних слов.
+""").strip()
+
+
 # ── Read-only answerer (info intent) ─────────────────────────────────────────
 
 ANSWERER_SYSTEM = dedent("""\
