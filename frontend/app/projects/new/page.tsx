@@ -177,6 +177,11 @@ export default function NewProjectPage() {
   const [scanLog, setScanLog] = useState<string[]>([]);
   const [discovered, setDiscovered] = useState<DiscoveredSite[]>([]);
 
+  // Step 3 — manual entry
+  const [showManualForm, setShowManualForm] = useState(false);
+  const [manualPath, setManualPath] = useState("");
+  const [manualUrl, setManualUrl] = useState("");
+
   // Step 4 — connect selected site
   const [selectedSite, setSelectedSite] = useState<DiscoveredSite | null>(null);
 
@@ -241,7 +246,8 @@ export default function NewProjectPage() {
       setScanLog((p) => [...p, `✓ Найдено проектов: ${data.length}`]);
       setLoading(false);
       if (data.length === 0) {
-        setScanLog((p) => [...p, "Сайтов на сервере не найдено"]);
+        setScanLog((p) => [...p, "Сайтов не найдено — укажите путь вручную"]);
+        setShowManualForm(true);
       }
     } catch (err: any) {
       setError(err?.response?.data?.detail || "Ошибка обнаружения");
@@ -286,6 +292,23 @@ export default function NewProjectPage() {
       setScanLog((p) => [...p, `✗ ${msg}`]);
       setLoading(false);
     }
+  }
+
+  /* ── Fork B — manual path entry ── */
+  function pickManualSite() {
+    if (!manualPath.trim()) return;
+    const name = projectName || manualPath.split("/").filter(Boolean).pop() || "Мой проект";
+    pickSite({
+      name,
+      url: manualUrl.trim() || null,
+      root_path: manualPath.trim(),
+      cms: null,
+      framework: null,
+      is_docker: false,
+      docker_compose_dir: null,
+      docker_container_name: null,
+      source_path: manualPath.trim(),
+    });
   }
 
   /* ── Render ── */
@@ -531,6 +554,57 @@ export default function NewProjectPage() {
                     </svg>
                   </button>
                 ))}
+
+                {/* Manual entry toggle */}
+                {!showManualForm ? (
+                  <button
+                    onClick={() => setShowManualForm(true)}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-dashed border-border text-sm text-text-muted hover:border-accent/50 hover:text-accent transition-colors"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="M7 2V12M2 7H12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                    Нет нужного проекта — указать путь вручную
+                  </button>
+                ) : (
+                  <div className="border border-accent/30 bg-accent/3 rounded-xl p-4 space-y-3">
+                    <p className="text-sm font-semibold text-text-main">Указать проект вручную</p>
+                    <div>
+                      <label className="block text-xs font-medium text-text-sub mb-1.5">Путь на сервере</label>
+                      <input
+                        className="field"
+                        placeholder="/var/www/mysite или /home/user/projects/app"
+                        value={manualPath}
+                        onChange={(e) => setManualPath(e.target.value)}
+                        autoFocus
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-text-sub mb-1.5">URL сайта <span className="text-text-muted font-normal">(необязательно)</span></label>
+                      <input
+                        className="field"
+                        placeholder="https://example.com"
+                        value={manualUrl}
+                        onChange={(e) => setManualUrl(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setShowManualForm(false)}
+                        className="flex-1 border border-border rounded-xl py-2.5 text-sm text-text-sub hover:bg-surface-2 transition-colors"
+                      >
+                        Отмена
+                      </button>
+                      <button
+                        onClick={pickManualSite}
+                        disabled={!manualPath.trim()}
+                        className="flex-1 bg-accent hover:bg-accent-hover disabled:opacity-40 text-white rounded-xl py-2.5 text-sm font-medium transition-colors"
+                      >
+                        Подключить
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex justify-start pt-1">
                   <button onClick={() => setScreen("server")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
