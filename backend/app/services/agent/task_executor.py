@@ -711,11 +711,34 @@ class TaskExecutor:
         if src:
             parts.append("Файлы проекта (фрагмент дерева):\n" + "\n".join(src))
 
-        parts.append(
-            f"\nЗАДАЧА: {subtask.get('title', '')}\n{subtask.get('description', '')}\n\n"
-            f"Изучи код инструментами (grep/read_file/list_dir) от корня {root}, найди настоящий "
-            "источник проблемы, внеси точечные правки в ИСХОДНЫЕ файлы и вызови finish."
-        )
+        # Generative tasks build a project from scratch — inject the confirmed spec
+        # and the workflow phases, and switch to a "create, don't patch" instruction.
+        from app.services.claude.workflows import GENERATIVE_TYPES
+        is_generative = (self._task.task_type or "") in GENERATIVE_TYPES
+        spec = getattr(self._task, "spec", None)
+        if spec:
+            parts.append(
+                "СПЕЦИФИКАЦИЯ ПРОЕКТА (подтверждена пользователем):\n"
+                + json.dumps(spec, ensure_ascii=False, indent=2)
+            )
+        if is_generative:
+            wf_id = (self._task.triage or {}).get("workflow_id")
+            from app.services.claude.workflows import build_phases_hint
+            phases = build_phases_hint(self._task.task_type or "", wf_id)
+            if phases:
+                parts.append(phases)
+            parts.append(
+                f"\nЗАДАЧА: {subtask.get('title', '')}\n{subtask.get('description', '')}\n\n"
+                f"Создай проект с нуля в каталоге {root} (он пустой). Создавай файлы через "
+                "write_file согласно спецификации, ставь зависимости и запускай через run_command "
+                "по фазам, проверь работоспособность и вызови finish."
+            )
+        else:
+            parts.append(
+                f"\nЗАДАЧА: {subtask.get('title', '')}\n{subtask.get('description', '')}\n\n"
+                f"Изучи код инструментами (grep/read_file/list_dir) от корня {root}, найди настоящий "
+                "источник проблемы, внеси точечные правки в ИСХОДНЫЕ файлы и вызови finish."
+            )
         return "\n".join(parts)
 
     def _apply_verify_with_healing(

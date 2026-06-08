@@ -323,7 +323,8 @@ class TaskEstimator:
         if self._task.task_type:
             lines.append(f"Тип задачи (из триажа): {self._task.task_type}")
             from app.services.claude.workflows import build_workflow_hint
-            hint = build_workflow_hint(self._task.task_type, self._task.tz_text or "")
+            wf_id = (self._task.triage or {}).get("workflow_id")
+            hint = build_workflow_hint(self._task.task_type, self._task.tz_text or "", wf_id)
             if hint:
                 lines.append(hint)
         # Include spec if already generated (confirms the spec to the estimator)

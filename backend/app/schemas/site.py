@@ -27,6 +27,10 @@ class SiteCreate(BaseModel):
     is_docker: bool | None = None
     docker_compose_dir: str | None = None
     docker_container_name: str | None = None
+    # "Create new project" flow: scaffold an empty directory on the server
+    # at <base_dir>/<slug-of-name> instead of pointing at an existing site.
+    create_new: bool = False
+    base_dir: str | None = None
 
 
 class SitePublic(BaseModel):
@@ -81,6 +85,10 @@ class TaskCreate(BaseModel):
     tz_text: str
     reference_urls: list[str] | None = None
     attachments: list[str] | None = None  # base64 images
+    # "Create new project" flow: a catalog pick is authoritative — when set,
+    # triage classification is skipped and these drive spec/estimate selection.
+    task_type: str | None = None       # one of the 5 generative types
+    workflow_id: str | None = None     # specific REGISTRY id, e.g. "telegram_bot"
 
 
 class SubtaskEstimate(BaseModel):

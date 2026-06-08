@@ -90,6 +90,25 @@ async def _get_site_or_404(site_id: str, user_id: uuid.UUID, db: DB) -> Site:
     return site
 
 
+def _slugify(name: str) -> str:
+    """Filesystem-safe slug for a project directory name."""
+    import re
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return slug or "project"
+
+
+def _ssh_from_server(server: Server) -> SSHClient:
+    """Build an SSH client directly from a server's stored creds (pre-site creation)."""
+    creds = json.loads(decrypt_credentials(server.encrypted_credentials)) if server.encrypted_credentials else {}
+    return SSHClient(
+        host=server.ip,
+        username=server.ssh_user,
+        port=server.ssh_port,
+        password=creds.get("password"),
+        private_key=creds.get("private_key"),
+    )
+
+
 # ─── Sites CRUD ──────────────────────────────────────────────────────────────
 
 @router.get("", response_model=list[SitePublic])
@@ -113,6 +132,22 @@ async def create_site(payload: SiteCreate, user: CurrentUser, db: DB) -> SitePub
         server = await db.get(Server, payload.server_id)
         if not server or server.user_id != user.id:
             raise HTTPException(status_code=404, detail="Server not found")
+
+        root_path = payload.site_root_path
+        # "Create new project": mkdir an empty target dir for the agent to build into.
+        if payload.create_new:
+            base = (payload.base_dir or "/var/www").rstrip("/")
+            root_path = f"{base}/{_slugify(payload.name)}"
+            try:
+                with _ssh_from_server(server) as ssh:
+                    code, _out, err = ssh.run(f"mkdir -p {root_path}")
+                if code != 0:
+                    raise RuntimeError(err or f"mkdir exit {code}")
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Не удалось создать каталог проекта: {exc}") from exc
+
         site = Site(
             user_id=user.id,
             server_id=server.id,
@@ -125,8 +160,8 @@ async def create_site(payload: SiteCreate, user: CurrentUser, db: DB) -> SitePub
             encrypted_credentials=None,  # inherited from server at runtime
             cms=payload.cms,
             framework=payload.framework,
-            site_root_path=payload.site_root_path,
-            is_docker=payload.is_docker,
+            site_root_path=root_path,
+            is_docker=False if payload.create_new else payload.is_docker,
             docker_compose_dir=payload.docker_compose_dir,
             docker_container_name=payload.docker_container_name,
         )
@@ -259,12 +294,22 @@ async def create_task(site_id: str, payload: TaskCreate, user: CurrentUser, db: 
     await db.commit()
     await db.refresh(task)
 
-    # ── Stage 0: two-level triage (cheap haiku call) ─────────────────────────
-    from app.services.agent.triage import triage as run_triage
-    tri = run_triage(site, payload.tz_text)
+    # ── Stage 0: classification ──────────────────────────────────────────────
+    # A catalog pick (create-new flow) is authoritative — skip the triage call.
+    from app.services.claude.workflows import GENERATIVE_TYPES
+    if payload.task_type and payload.task_type in GENERATIVE_TYPES:
+        tri = {
+            "intent": "action",
+            "type": payload.task_type,
+            "workflow_id": payload.workflow_id,
+            "source": "catalog",
+        }
+    else:
+        from app.services.agent.triage import triage as run_triage
+        tri = run_triage(site, payload.tz_text)
     task.intent = tri.get("intent")
     task.task_type = tri.get("type")
-    task.triage = tri  # decision log
+    task.triage = tri  # decision log (carries workflow_id for catalog picks)
     # Hard reject — out of scope / malicious. No estimation, no edits.
     if tri.get("intent") == "reject":
         rej = tri.get("reject") or {}

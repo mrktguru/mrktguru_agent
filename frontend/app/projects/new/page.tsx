@@ -32,8 +32,25 @@ type DiscoveredSite = {
 type Screen =
   | "name"
   | "server"
+  | "mode"
   | "discovery"
+  | "catalog"
+  | "newproject"
   | "working";
+
+type CatalogItem = {
+  id: string;
+  label: string;
+  keywords: string[];
+  credits_min: number;
+  credits_max: number;
+};
+type CatalogGroup = {
+  category: string;
+  task_type: string;
+  items: CatalogItem[];
+};
+type WfPick = { task_type: string; workflow_id: string; label: string };
 
 /* ─── Progress bar ───────────────────────────────────────────────────────── */
 const STEP_LABELS = ["Проект", "Сервер", "Выбор"];
@@ -44,7 +61,10 @@ function screenToStep(s: Screen): number {
       return 1;
     case "server":
       return 2;
+    case "mode":
     case "discovery":
+    case "catalog":
+    case "newproject":
       return 3;
     default:
       return 4;
@@ -185,6 +205,12 @@ export default function NewProjectPage() {
   // Step 4 — connect selected site
   const [selectedSite, setSelectedSite] = useState<DiscoveredSite | null>(null);
 
+  // Create-new flow — catalog + project details
+  const [catalog, setCatalog] = useState<CatalogGroup[]>([]);
+  const [wfPick, setWfPick] = useState<WfPick | null>(null);
+  const [npPath, setNpPath] = useState("/var/www");
+  const [npTz, setNpTz] = useState("");
+
   const setS = (k: keyof typeof srv, v: string) => setSrv((f) => ({ ...f, [k]: v }));
 
   /* ── Load existing servers when entering step 2 ── */
@@ -230,7 +256,47 @@ export default function NewProjectPage() {
       setLoading(false);
     }
 
-    if (serverId) runDiscovery(serverId);
+    if (serverId) setScreen("mode");
+  }
+
+  /* ── Load the build catalog when entering the catalog screen ── */
+  useEffect(() => {
+    if (screen !== "catalog" || catalog.length > 0) return;
+    api
+      .get<CatalogGroup[]>("/api/workflows/catalog")
+      .then(({ data }) => setCatalog(data))
+      .catch(() => setError("Не удалось загрузить каталог"));
+  }, [screen]);
+
+  /* ── Create-new fork — empty project on server, then seed a generative task ── */
+  async function createNewProject() {
+    if (!selectedServerId || !wfPick) return;
+    setError("");
+    setScreen("working");
+    setLoading(true);
+    setScanLog(["🆕 Создаю новый проект на сервере..."]);
+    try {
+      const { data: createdSite } = await api.post<{ id: string }>("/api/sites", {
+        name: projectName || wfPick.label,
+        server_id: selectedServerId,
+        create_new: true,
+        base_dir: npPath.trim() || undefined,
+      });
+      setScanLog((p) => [...p, "✓ Каталог проекта создан", "🧠 Готовлю спецификацию..."]);
+      await api.post(`/api/sites/${createdSite.id}/tasks`, {
+        tz_text: npTz.trim() || wfPick.label,
+        task_type: wfPick.task_type,
+        workflow_id: wfPick.workflow_id,
+      });
+      setScanLog((p) => [...p, "✓ Открываю проект..."]);
+      await new Promise((r) => setTimeout(r, 400));
+      router.push(`/site/${createdSite.id}`);
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || "Не удалось создать проект";
+      setError(msg);
+      setScanLog((p) => [...p, `✗ ${msg}`]);
+      setLoading(false);
+    }
   }
 
   /* ── Step 3 — discovery ── */
@@ -523,6 +589,165 @@ export default function NewProjectPage() {
           </div>
         )}
 
+        {/* ── Step 3: Mode fork — connect existing vs create new ── */}
+        {screen === "mode" && (
+          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold text-text-main mb-1">Что будем делать?</h2>
+              <p className="text-sm text-text-muted">Подключить существующий сайт или создать новый проект с нуля</p>
+            </div>
+            <div className="space-y-3">
+              <button
+                onClick={() => selectedServerId && runDiscovery(selectedServerId)}
+                className="w-full flex items-center gap-4 px-4 py-4 rounded-xl border border-border bg-surface-2 hover:border-accent/40 hover:bg-accent/5 text-left transition-colors"
+              >
+                <span className="text-2xl">🔌</span>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-text-main">Подключить существующий сайт</p>
+                  <p className="text-xs text-text-muted">Найдём проекты на сервере — выберете нужный</p>
+                </div>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-text-muted">
+                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setScreen("catalog")}
+                className="w-full flex items-center gap-4 px-4 py-4 rounded-xl border border-border bg-surface-2 hover:border-accent/40 hover:bg-accent/5 text-left transition-colors"
+              >
+                <span className="text-2xl">✨</span>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-text-main">Создать новый проект</p>
+                  <p className="text-xs text-text-muted">Бот, сайт, парсер, AI-ассистент — агент построит с нуля</p>
+                </div>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-text-muted">
+                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex justify-start pt-4">
+              <button onClick={() => setScreen("server")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
+                Назад
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 3: Catalog — what to build ── */}
+        {screen === "catalog" && (
+          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
+            <div className="mb-5">
+              <h2 className="text-xl font-semibold text-text-main mb-1">Что создать?</h2>
+              <p className="text-sm text-text-muted">Выберите тип проекта — детали уточним на следующем шаге</p>
+            </div>
+            {catalog.length === 0 ? (
+              <div className="flex items-center gap-2 text-text-muted text-sm py-8 justify-center">
+                <svg className="animate-spin" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="18 12" />
+                </svg>
+                Загружаю каталог...
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {catalog.map((group) => (
+                  <div key={group.task_type}>
+                    <p className="text-xs font-semibold text-text-sub uppercase tracking-wide mb-2">{group.category}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {group.items.map((item) => {
+                        const active = wfPick?.workflow_id === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => setWfPick({ task_type: group.task_type, workflow_id: item.id, label: item.label })}
+                            className={`flex flex-col items-start gap-1 px-3.5 py-3 rounded-xl border text-left transition-colors ${
+                              active ? "border-accent bg-accent/5" : "border-border bg-surface-2 hover:border-accent/30"
+                            }`}
+                          >
+                            <span className="text-sm font-medium text-text-main">{item.label}</span>
+                            <span className="text-xs text-text-muted">{item.credits_min}–{item.credits_max} кр.</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex justify-between pt-5">
+              <button onClick={() => setScreen("mode")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
+                Назад
+              </button>
+              <button
+                onClick={() => setScreen("newproject")}
+                disabled={!wfPick}
+                className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                Далее
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 3: New project details — location + TZ ── */}
+        {screen === "newproject" && (
+          <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
+            <div className="mb-5">
+              <h2 className="text-xl font-semibold text-text-main mb-1">{wfPick?.label}</h2>
+              <p className="text-sm text-text-muted">Опишите проект и укажите, где разместить его на сервере</p>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-text-sub mb-1.5">Базовый каталог на сервере</label>
+                <input
+                  className="field"
+                  placeholder="/var/www"
+                  value={npPath}
+                  onChange={(e) => setNpPath(e.target.value)}
+                />
+                <p className="text-xs text-text-muted mt-1">Проект создастся в {npPath.replace(/\/$/, "") || "/var/www"}/&lt;имя&gt;</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-text-sub mb-1.5">Опишите проект подробнее</label>
+                <textarea
+                  className="field h-32 resize-none"
+                  placeholder="Например: Telegram-бот для записи на маникюр — выбор услуги, мастера и времени, напоминания за день, админка для салона..."
+                  value={npTz}
+                  onChange={(e) => setNpTz(e.target.value)}
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            {error && (
+              <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2 mt-3">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
+                  <path d="M7 4.5V7.5M7 9.5V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+                {error}
+              </div>
+            )}
+
+            <div className="flex justify-between pt-5">
+              <button onClick={() => setScreen("catalog")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
+                Назад
+              </button>
+              <button
+                onClick={createNewProject}
+                disabled={loading || !npTz.trim()}
+                className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                {loading ? "Создаю..." : "Создать проект"}
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M5 11L9 7L5 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* ── Step 3: Discovery ── */}
         {screen === "discovery" && (
           <div className="bg-surface rounded-2xl border border-border shadow-card p-6">
@@ -607,7 +832,7 @@ export default function NewProjectPage() {
                 )}
 
                 <div className="flex justify-start pt-1">
-                  <button onClick={() => setScreen("server")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
+                  <button onClick={() => setScreen("mode")} className="text-sm text-text-muted hover:text-text-main px-4 py-2.5 rounded-xl hover:bg-surface-3 transition-colors">
                     Назад
                   </button>
                 </div>

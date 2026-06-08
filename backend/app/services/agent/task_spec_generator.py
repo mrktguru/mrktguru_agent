@@ -43,10 +43,17 @@ class TaskSpecGenerator:
         self._task = task
 
     def should_generate(self) -> bool:
-        """Return True if this task type + TZ length warrants spec generation."""
+        """Return True if this task type + TZ length warrants spec generation.
+
+        A catalog pick (create-new flow) always generates a spec — the user
+        explicitly chose to build this, regardless of how short their TZ is.
+        """
         task_type = self._task.task_type or ""
-        tz_len = len(self._task.tz_text or "")
-        return task_type in GENERATIVE_TYPES and tz_len >= _MIN_TZ_LEN
+        if task_type not in GENERATIVE_TYPES:
+            return False
+        if (self._task.triage or {}).get("source") == "catalog":
+            return True
+        return len(self._task.tz_text or "") >= _MIN_TZ_LEN
 
     async def generate(self) -> dict:
         """Call task_spec layer → parse and return spec dict.
@@ -101,7 +108,8 @@ class TaskSpecGenerator:
                     parts.append(f"Ответы: {answer}")
 
         from app.services.claude.workflows import build_spec_hint
-        hint = build_spec_hint(self._task.task_type or "", self._task.tz_text or "")
+        wf_id = (self._task.triage or {}).get("workflow_id")
+        hint = build_spec_hint(self._task.task_type or "", self._task.tz_text or "", wf_id)
         if hint:
             parts.append(f"Дополнительный контекст по типу:\n{hint}")
         parts.append(f"ТЗ пользователя:\n{self._task.tz_text}")
