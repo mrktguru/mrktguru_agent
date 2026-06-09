@@ -1180,6 +1180,7 @@ export default function SitePage() {
                       onChange={(k, v) => setInputFields(p => ({ ...p, [k]: v }))}
                       onSubmit={handleResume}
                       busy={busy}
+                      available={available}
                     />
                   )}
 
@@ -1407,29 +1408,42 @@ function ClarifyMsg({ data, pending }: {
 }
 
 /* ─── Input request (pause for secrets / confirmation) ───────────────────────── */
-function InputRequestMsg({ data, active, values, onChange, onSubmit, busy }: {
+function InputRequestMsg({ data, active, values, onChange, onSubmit, busy, available }: {
   data: PendingInput; active: boolean;
   values: Record<string, string>; onChange: (k: string, v: string) => void;
-  onSubmit: () => void; busy: boolean;
+  onSubmit: () => void; busy: boolean; available: number | null;
 }) {
   const isSecret = (f: string) => /secret|token|key|password|pass/i.test(f);
   const allFilled = data.required_fields.every(f => (values[f] || "").trim().length > 0);
 
-  // Budget-overage pause → approve extra credits to continue (CREDIT_MECHANICS.md §7 Б).
   if (data.kind === "budget_overage") {
+    const extra = data.requested_extra ?? 0;
+    const canContinue = available !== null && available >= extra;
     return (
-      <AgentBubble label="SiteDoc AI — нужно пополнить баланс">
+      <AgentBubble label={canContinue ? "SiteDoc AI — задача требует больше кредитов" : "SiteDoc AI — нужно пополнить баланс"}>
         <p className="text-sm text-text-main whitespace-pre-wrap mb-3">{data.message}</p>
         <div className="mb-3 rounded-xl bg-amber-50 border border-amber-100 px-3.5 py-2.5 text-xs space-y-1">
           <div className="flex justify-between"><span className="text-amber-700">Потрачено</span><span className="font-medium text-amber-800">{Math.round(data.spent || 0)} кр.</span></div>
           <div className="flex justify-between"><span className="text-amber-700">Резерв</span><span className="font-medium text-amber-800">{Math.round(data.reserved || 0)} кр.</span></div>
-          {(data.requested_extra ?? 0) > 0 && (
-            <div className="flex justify-between"><span className="text-amber-700">Нужно дополнительно</span><span className="font-medium text-amber-800">~{Math.round(data.requested_extra || 0)} кр.</span></div>
+          {extra > 0 && (
+            <div className="flex justify-between"><span className="text-amber-700">Нужно дополнительно</span><span className="font-medium text-amber-800">~{Math.round(extra)} кр.</span></div>
           )}
         </div>
-        <a href="/billing" className="inline-block bg-accent text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-accent-hover transition-colors">
-          Пополнить баланс
-        </a>
+        {active && canContinue ? (
+          <button
+            onClick={onSubmit}
+            disabled={busy}
+            className="bg-accent text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-40"
+          >
+            {busy ? "Продолжаю..." : `▶ Продолжить · +${Math.round(extra)} кр.`}
+          </button>
+        ) : active ? (
+          <a href="/billing" className="inline-block bg-accent text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-accent-hover transition-colors">
+            Пополнить баланс
+          </a>
+        ) : (
+          <p className="text-xs text-text-muted">Продолжаю…</p>
+        )}
       </AgentBubble>
     );
   }
