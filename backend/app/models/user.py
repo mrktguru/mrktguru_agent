@@ -24,3 +24,6 @@ class User(UUIDMixin, TimestampMixin, Base):
     token_credits: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)          # bought / available pool
     token_credits_monthly: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # plan allotment
     frozen_credits: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)         # held under active tasks
+
+    # ── Integrations ─────────────────────────────────────────────────────────
+    figma_token_enc: Mapped[str | None] = mapped_column(String, nullable=True)

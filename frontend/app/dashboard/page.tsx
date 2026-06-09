@@ -25,6 +25,7 @@ const CMS_BADGE: Record<string, string> = {
 
 const NAV_ITEMS = [
   { icon: "◻", label: "Сайты", href: "/dashboard", active: true },
+  { icon: "⚡", label: "Интеграции", href: "/integrations", active: false },
   { icon: "⚙", label: "Настройки", href: "#", active: false },
 ];
 

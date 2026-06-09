@@ -765,6 +765,7 @@ TRIAGE_ROUTER_SYSTEM = dedent("""\
 
     type (action — новые продукты с нуля):
       new_site       — новый сайт/лендинг/SPA/WordPress-тема/интернет-магазин/дашборд
+      figma_to_site  — верстка сайта по Figma-макету (ссылка на figma.com)
       new_site_mobile— мобильное приложение (React Native, Flutter, Telegram Mini App)
       new_bot        — бот: Telegram, Discord, WhatsApp, Slack, VK, n8n-workflow
       ai_assistant   — AI-продукт: RAG-чатбот, AI-агент, голосовой бот,
@@ -822,6 +823,8 @@ TRIAGE_ROUTER_SYSTEM = dedent("""\
     «создай мобильное приложение React Native» → action / new_site_mobile / new_site
     «Telegram Mini App» → action / new_site_mobile / new_site
     «Flutter-приложение» → action / new_site_mobile / new_site
+    «сверстай по фигме» → action / figma_to_site / new_site
+    «сделай сайт по макету figma» → action / figma_to_site / new_site
     «создай лендинг с нуля» → action / new_site / new_site
     «сделай интернет-магазин» → action / new_site / new_site
     «дашборд из CSV» → action / new_site / new_site

@@ -62,6 +62,7 @@ BUDGET_BY_TYPE: dict[str, tuple[int, int]] = {
     "new_parser":       (20,  80),
     "integration":      (30,  80),
     "new_site":         (80,  200),
+    "figma_to_site":    (100, 250),
     "new_site_mobile":  (150, 400),
     "new_bot":          (60,  150),
     "ai_assistant":     (100, 300),

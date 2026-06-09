@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, auth, servers, sites, tasks, workflows
+from app.api import admin, auth, integrations, servers, sites, tasks, workflows
 from app.api.tasks_ws import ws_router as tasks_ws_router
 from app.core.config import settings
 
@@ -46,6 +46,7 @@ async def health() -> dict[str, str]:
 
 
 app.include_router(auth.router)
+app.include_router(integrations.router)
 app.include_router(servers.router)
 app.include_router(sites.router)
 app.include_router(tasks.router)

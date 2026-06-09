@@ -432,6 +432,23 @@ class TaskExecutor:
                 },
             },
             {
+                "name": "figma_read_design",
+                "description": (
+                    "Загрузить дизайн из Figma: получить структуру секций (JSON-дайджест) "
+                    "и скриншот выбранного фрейма. Передай figma_url из запроса пользователя. "
+                    "Если frame_id не указан — инструмент сам выберет лучший фрейм; "
+                    "если кандидатов несколько — вернёт список для выбора пользователем."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "figma_url": {"type": "string", "description": "Полная ссылка на Figma-файл"},
+                        "frame_id": {"type": "string", "description": "Опц. ID конкретного фрейма (если пользователь уже выбрал)"},
+                    },
+                    "required": ["figma_url"],
+                },
+            },
+            {
                 "name": "finish",
                 "description": (
                     "Вызвать когда все правки внесены. Система пересоберёт проект и проверит сайт; "
@@ -594,9 +611,14 @@ class TaskExecutor:
                         })
                 else:
                     out = self._dispatch_tool(tu.name, tu.input or {}, idx, subtask)
-                    tool_results.append({
-                        "type": "tool_result", "tool_use_id": tu.id, "content": out[:8000],
-                    })
+                    if isinstance(out, list):
+                        tool_results.append({
+                            "type": "tool_result", "tool_use_id": tu.id, "content": out,
+                        })
+                    else:
+                        tool_results.append({
+                            "type": "tool_result", "tool_use_id": tu.id, "content": out[:8000],
+                        })
 
             # Pause requested → suspend the whole task (sibling results already computed)
             if pause_tu:
@@ -671,7 +693,119 @@ class TaskExecutor:
             if err and err.strip():
                 body += f"\n[stderr] {err.strip()}"
             return (f"exit={rc}\n{body}").strip()[:8000] or f"exit={rc} (нет вывода)"
+        if name == "figma_read_design":
+            return self._dispatch_figma(inp, idx)
         return f"(неизвестный инструмент: {name})"
+
+    def _dispatch_figma(self, inp: dict, idx: int) -> str | list:
+        """Fetch Figma design digest + screenshot. Returns list[dict] for multimodal tool_result."""
+        import base64
+        import json as _json
+
+        from app.core.security import _get_fernet
+        from app.models.user import User as _User
+        from app.services.figma.client import FigmaClient, parse_figma_url
+        from app.services.figma.parser import build_digest, pick_best_frame
+        from sqlalchemy import select as _select
+
+        figma_url = inp.get("figma_url", "").strip()
+        forced_frame_id = inp.get("frame_id", "").strip() or None
+
+        # Load user's PAT from DB
+        try:
+            user = self._db.execute(
+                _select(_User).where(_User.id == self._task.user_id)
+            ).scalar_one_or_none()
+        except Exception as e:
+            return f"Ошибка чтения профиля пользователя: {e}"
+
+        if not user or not user.figma_token_enc:
+            return (
+                "❌ Figma не подключена. Добавьте Personal Access Token: "
+                "figma.com → Settings → Security → Personal access tokens → Generate. "
+                "Затем вставьте токен на странице /integrations."
+            )
+
+        try:
+            pat = _get_fernet().decrypt(user.figma_token_enc.encode()).decode()
+        except Exception:
+            return "❌ Не удалось расшифровать Figma-токен. Переподключите интеграцию на /integrations."
+
+        try:
+            file_key, url_node_id = parse_figma_url(figma_url)
+        except ValueError as e:
+            return str(e)
+
+        client = FigmaClient(pat)
+        self._log("  🎨 Figma: загружаю список фреймов…", "running", idx)
+
+        # Pass 1 — TOC
+        try:
+            toc = client.get_toc(file_key)
+        except Exception as e:
+            return f"❌ Ошибка Figma API: {e}"
+
+        if not toc:
+            return "❌ Figma-файл не содержит фреймов или недоступен по этому токену."
+
+        # Determine frame to use
+        if forced_frame_id:
+            frame_meta = next((f for f in toc if f["id"] == forced_frame_id), None)
+            if not frame_meta:
+                frame_meta = {"id": forced_frame_id, "name": forced_frame_id, "page": "?", "width": 0, "height": 0}
+            selected_id = forced_frame_id
+        else:
+            # Check if URL already has a node-id
+            if url_node_id:
+                frame_meta = next((f for f in toc if f["id"] == url_node_id), None) or {
+                    "id": url_node_id, "name": url_node_id, "page": "?", "width": 0, "height": 0
+                }
+                selected_id = url_node_id
+            else:
+                candidates = pick_best_frame(toc)
+                if len(candidates) == 1:
+                    frame_meta = candidates[0]
+                    selected_id = frame_meta["id"]
+                else:
+                    # Return candidate list for Claude to show user
+                    lines = ["Найдено несколько фреймов — уточни какой вёрстать:\n"]
+                    for i, f in enumerate(candidates, 1):
+                        lines.append(f"{i}. «{f['name']}» ({int(f['width'])}×{int(f['height'])}px) — id: {f['id']}")
+                    lines.append("\nПередай нужный frame_id при следующем вызове figma_read_design.")
+                    return "\n".join(lines)
+
+        self._log(f"  🎨 Figma: читаю фрейм «{frame_meta.get('name', selected_id)}»…", "running", idx)
+
+        # Pass 2 — frame structure
+        try:
+            frame_node = client.get_nodes(file_key, selected_id, depth=5)
+        except Exception as e:
+            return f"❌ Ошибка загрузки фрейма: {e}"
+
+        try:
+            digest = build_digest(frame_node, frame_meta)
+            digest_str = _json.dumps(digest, ensure_ascii=False)[:6000]
+        except Exception as e:
+            digest_str = f"(ошибка парсинга дизайна: {e})"
+
+        # Screenshot
+        self._log("  🎨 Figma: получаю скриншот…", "running", idx)
+        content_blocks: list[dict] = [{"type": "text", "text": digest_str}]
+        try:
+            img_url = client.get_frame_image_url(file_key, selected_id, scale=0.5)
+            if img_url:
+                img_bytes = client.download_image(img_url)
+                if len(img_bytes) < 5 * 1024 * 1024:  # skip if > 5 MB
+                    b64 = base64.b64encode(img_bytes).decode()
+                    content_blocks.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": b64},
+                    })
+        except Exception:
+            pass  # screenshot is best-effort
+
+        self._log(f"  ✅ Figma: дизайн загружен ({len(digest.get('sections', []))} секций)", "running", idx)
+        return content_blocks
 
     def _agent_edit(self, inp: dict, idx: int, subtask: dict) -> str:
         path = inp.get("path", "")
