@@ -1592,6 +1592,43 @@ function SpecCard({ taskId, spec, specType, busy, onConfirm }: {
     new_parser: "Парсер данных",
     new_site_mobile: "Мобильное приложение",
   };
+  const HIDDEN_KEYS = new Set(["spec_type", "extra"]);
+  const LABEL_MAP: Record<string, string> = {
+    site_type: "Тип сайта",
+    stack: "Стек",
+    has_cms: "CMS",
+    has_auth: "Авторизация",
+    has_form: "Форма",
+    form_destination: "Форма → куда",
+    has_payments: "Оплата",
+    sections: "Разделы",
+    color_scheme_hint: "Цветовая схема",
+    required_secrets: "Нужны ключи",
+    platform: "Платформа",
+    commands: "Команды",
+    fsm_states: "Состояния",
+    data_sources: "Источники данных",
+    llm_provider: "LLM",
+    vector_db: "Векторная БД",
+  };
+
+  function formatValue(value: unknown): string {
+    if (value === true) return "Да";
+    if (value === false) return "Нет";
+    if (Array.isArray(value)) {
+      if (value.length === 0) return "";
+      return value.map(v =>
+        typeof v === "object" && v !== null
+          ? (v as Record<string, unknown>).name
+            ? String((v as Record<string, unknown>).name)
+            : JSON.stringify(v)
+          : String(v)
+      ).join(", ");
+    }
+    if (typeof value === "object" && value !== null) return JSON.stringify(value);
+    return String(value);
+  }
+
   const label = TYPE_LABELS[specType] || specType;
 
   return (
@@ -1604,14 +1641,15 @@ function SpecCard({ taskId, spec, specType, busy, onConfirm }: {
       </span>
       <div className="border border-blue-100 rounded-xl overflow-hidden mb-4 bg-white">
         {Object.entries(spec).map(([key, value]) => {
+          if (HIDDEN_KEYS.has(key)) return null;
           if (value === null || value === undefined || value === "") return null;
-          const displayVal = Array.isArray(value)
-            ? (value as unknown[]).map(v => String(v)).join(", ")
-            : String(value);
+          const displayVal = formatValue(value);
+          if (!displayVal) return null;
+          const fieldLabel = LABEL_MAP[key] ?? key.replace(/_/g, " ");
           return (
             <div key={key} className="flex items-start gap-3 px-3.5 py-2.5 border-b last:border-0 border-blue-50">
               <span className="text-xs font-medium text-text-sub flex-shrink-0 w-32 capitalize pt-[1px]">
-                {key.replace(/_/g, " ")}
+                {fieldLabel}
               </span>
               <span className="text-xs text-text-main flex-1 leading-relaxed">{displayVal}</span>
             </div>
