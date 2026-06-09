@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import TokenHandler from "./TokenHandler";
 
 export default function LoginClient() {
   const [email, setEmail] = useState("");
@@ -10,15 +11,6 @@ export default function LoginClient() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const params = useSearchParams();
-
-  useEffect(() => {
-    const token = params.get("token");
-    if (token) {
-      localStorage.setItem("token", token);
-      redirectAfterLogin();
-    }
-  }, [params]);
 
   async function redirectAfterLogin() {
     try {
@@ -28,6 +20,11 @@ export default function LoginClient() {
       router.replace("/projects/new");
     }
   }
+
+  const handleToken = useCallback(async (token: string) => {
+    localStorage.setItem("token", token);
+    await redirectAfterLogin();
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -51,6 +48,10 @@ export default function LoginClient() {
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center px-6 bg-surface-2">
+      <Suspense fallback={null}>
+        <TokenHandler onToken={handleToken} />
+      </Suspense>
+
       <div className="w-full max-w-sm">
         <a href="/" className="flex items-center justify-center gap-2 mb-8">
           <div className="w-8 h-8 rounded-xl bg-accent flex items-center justify-center">
