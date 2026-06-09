@@ -9,11 +9,12 @@ register(WorkflowDef(
     credits_max=3000,
     key_pause="после структуры темы/плагина — подтверди хук-архитектуру",
     questionnaire=(
-        "1. Кастомная тема или дочерняя от существующей?\n"
-        "2. Нужны ли кастомные типы записей (CPT)?\n"
-        "3. Page builder: Elementor, Gutenberg блоки, нет?\n"
-        "4. WooCommerce нужен?\n"
-        "5. Хостинг: shared / VPS / WP Engine?"
+        "1. Email администратора (для создания аккаунта WordPress)?\n"
+        "2. Кастомная тема или дочерняя от существующей?\n"
+        "3. Нужны ли кастомные типы записей (CPT)?\n"
+        "4. Page builder: Elementor, Gutenberg блоки, нет?\n"
+        "5. WooCommerce нужен?\n"
+        "6. Хостинг: shared / VPS / WP Engine?"
     ),
     phases=(
         "1. Структура темы: functions.php, template hierarchy (пауза)\n"

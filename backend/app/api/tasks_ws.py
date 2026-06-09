@@ -32,6 +32,8 @@ def _stop_event(task) -> dict:
     ev = {"type": "task_complete", "status": task.status}
     if task.status == "answered":
         ev["answer"] = task.answer_text
+    if task.agent_summary:
+        ev["agent_summary"] = task.agent_summary
     return ev
 
 

@@ -75,6 +75,7 @@ type Task = {
   upsell?: UpsellItem[] | null;
   screenshot_before?: string | null;
   screenshot_after?: string | null;
+  agent_summary?: string | null;
 };
 
 type LogLine = {
@@ -88,7 +89,7 @@ type MsgAnalyzing = { kind: "analyzing" };
 type MsgClarify = { kind: "clarify"; data: Clarification };
 type MsgEstimate = { kind: "estimate"; data: TaskEstimate; subtasks: Subtask[] };
 type MsgRunning = { kind: "running"; taskId: string; backupAvailable?: boolean; isRollback?: boolean };
-type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null; estimated?: number | null; actual?: number | null; reserved?: number | null; upsell?: UpsellItem[] | null; screenshotBefore?: string | null; screenshotAfter?: string | null };
+type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null; estimated?: number | null; actual?: number | null; reserved?: number | null; upsell?: UpsellItem[] | null; screenshotBefore?: string | null; screenshotAfter?: string | null; agentSummary?: string | null };
 type MsgError = { kind: "error"; text: string };
 type MsgInputRequest = { kind: "input_request"; taskId: string; data: PendingInput };
 type MsgAnswered = { kind: "answered"; taskId: string; answer: string };
@@ -654,6 +655,7 @@ export default function SitePage() {
             estimated: t.estimated_credits, actual: t.actual_credits, reserved: t.reserved_credits,
             upsell: t.upsell,
             screenshotBefore: t.screenshot_before, screenshotAfter: t.screenshot_after,
+            agentSummary: t.agent_summary,
           });
           break;
         case "rolled_back":
@@ -845,6 +847,7 @@ export default function SitePage() {
       if (msg.type === "log") {
         setRunningLogs(p => ({ ...p, [taskId]: [...(p[taskId] || []), msg] }));
       } else if (msg.type === "task_complete") {
+        const agentSummary: string | null = msg.agent_summary ?? null;
         setRunningLogs(p => {
           const logs = p[taskId] || [];
           setMessages(prev => prev.map(m => {
@@ -856,6 +859,7 @@ export default function SitePage() {
               taskId,
               logs,
               backupAvailable: rolledBack ? false : (m.backupAvailable ?? true),
+              agentSummary,
             };
           }));
           return p;
@@ -874,7 +878,8 @@ export default function SitePage() {
             if (t) setMessages(prev => prev.map(m =>
               m.kind === "done" && m.taskId === taskId
                 ? { ...m, estimated: t.estimated_credits, actual: t.actual_credits, reserved: t.reserved_credits,
-                    screenshotBefore: t.screenshot_before, screenshotAfter: t.screenshot_after }
+                    screenshotBefore: t.screenshot_before, screenshotAfter: t.screenshot_after,
+                    agentSummary: m.agentSummary ?? t.agent_summary ?? null }
                 : m
             ));
           })
@@ -907,14 +912,48 @@ export default function SitePage() {
         api.get<Task[]>(`/api/sites/${id}/tasks`).then(({ data }) => setAllTasks(data)).catch(() => {});
       }
     };
-    ws.onerror = () => {
-      setMessages(prev => prev.map(m =>
-        m.kind === "running" && m.taskId === taskId
-          ? { kind: "error", text: "WebSocket disconnected" }
-          : m
-      ));
-      setBusy(false);
+    const TERMINAL_STATUSES = new Set(["done", "failed", "rolled_back", "stalled", "answered"]);
+    const handleWsDisconnect = () => {
+      // Before showing an error, check if the task actually finished via REST.
+      api.get<Task[]>(`/api/sites/${id}/tasks`).then(({ data }) => {
+        const t = data.find(x => x.id === taskId);
+        if (t && TERMINAL_STATUSES.has(t.status)) {
+          setAllTasks(data);
+          setRunningLogs(p => ({ ...p, [taskId]: p[taskId] || [] }));
+          setMessages(prev => prev.map(m => {
+            if (m.kind !== "running" || m.taskId !== taskId) return m;
+            return {
+              kind: "done", status: t.status, taskId,
+              logs: (wsRef.current as any)?.[`logs_${taskId}`] || null,
+              backupAvailable: t.backup_available,
+              errorMessage: t.error_message,
+              estimated: t.estimated_credits, actual: t.actual_credits, reserved: t.reserved_credits,
+              upsell: t.upsell,
+              screenshotBefore: t.screenshot_before, screenshotAfter: t.screenshot_after,
+              agentSummary: t.agent_summary ?? null,
+            } satisfies MsgDone;
+          }));
+          refreshBalance();
+          setBusy(false);
+        } else {
+          setMessages(prev => prev.map(m =>
+            m.kind === "running" && m.taskId === taskId
+              ? { kind: "error", text: "Соединение прервано. Обновите страницу." }
+              : m
+          ));
+          setBusy(false);
+        }
+      }).catch(() => {
+        setMessages(prev => prev.map(m =>
+          m.kind === "running" && m.taskId === taskId
+            ? { kind: "error", text: "Соединение прервано. Обновите страницу." }
+            : m
+        ));
+        setBusy(false);
+      });
     };
+    ws.onerror = handleWsDisconnect;
+    ws.onclose = (e) => { if (e.code !== 1000) handleWsDisconnect(); };
   }
 
   /* ── Rollback ───────────────────────────────────────────────────────────── */
@@ -1238,6 +1277,9 @@ export default function SitePage() {
                         onRollback={msg.status === "done" && msg.backupAvailable ? () => handleRollback(msg.taskId) : undefined}
                         onNew={() => inputRef.current?.focus()}
                       />
+                      {msg.status === "done" && msg.agentSummary && (
+                        <AgentReport summary={msg.agentSummary} />
+                      )}
                       {msg.status === "done" && msg.actual != null && (
                         <div className="mt-2 text-xs text-text-muted flex flex-wrap gap-x-3 gap-y-0.5">
                           {msg.estimated != null && <span>Оценка: {Math.round(msg.estimated)} кр.</span>}
@@ -1683,6 +1725,36 @@ function SpecCard({ taskId, spec, specType, busy, onConfirm }: {
 }
 
 /* ─── Upsell card (follow-up suggestions after task completion) ──────────── */
+function AgentReport({ summary }: { summary: string }) {
+  const [copied, setCopied] = useState(false);
+  // Detect if summary contains credentials block (lines starting with 🌐/🔧/👤/🔑/📧)
+  const hasCredentials = /[🌐🔧👤🔑📧]/.test(summary);
+  function copy() {
+    navigator.clipboard.writeText(summary).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+  return (
+    <div className={`mt-3 rounded-2xl border px-4 py-3 ${hasCredentials ? "border-blue-200 bg-blue-50/40" : "border-border bg-surface-2"}`}>
+      <div className="flex items-center justify-between mb-2">
+        <p className={`text-xs font-semibold flex items-center gap-1.5 ${hasCredentials ? "text-blue-700" : "text-text-sub"}`}>
+          <span>📋</span> {hasCredentials ? "Данные для входа" : "Отчёт о выполнении"}
+        </p>
+        <button
+          onClick={copy}
+          className="text-xs text-text-muted hover:text-text-main transition-colors"
+        >
+          {copied ? "✓ скопировано" : "копировать"}
+        </button>
+      </div>
+      <pre className="text-sm text-text-main whitespace-pre-wrap font-mono leading-relaxed">
+        {summary}
+      </pre>
+    </div>
+  );
+}
+
 function UpsellCard({ items, onSelect }: {
   items: UpsellItem[];
   onSelect: (item: UpsellItem) => void;

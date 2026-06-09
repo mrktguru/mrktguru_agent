@@ -79,3 +79,5 @@ class Task(UUIDMixin, TimestampMixin, Base):
     spec: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # Upsell suggestions generated after settlement: [{title, description, type, est_credits}]
     upsell: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Finish summary written by the agent — shown as "access report" after task completion
+    agent_summary: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -208,6 +208,7 @@ class TaskPublic(BaseModel):
     # WORKFLOWS.md: spec + upsell
     spec: dict | None = None
     upsell: list[dict] | None = None
+    agent_summary: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -243,6 +244,7 @@ class TaskPublic(BaseModel):
             settled_at=getattr(t, "settled_at", None),
             spec=getattr(t, "spec", None),
             upsell=getattr(t, "upsell", None),
+            agent_summary=getattr(t, "agent_summary", None),
         )
 
 

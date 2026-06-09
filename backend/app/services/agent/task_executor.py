@@ -591,6 +591,8 @@ class TaskExecutor:
                     summary = (tu.input or {}).get("summary", "")
                     if summary:
                         self._log("  📝 " + summary[:240], "running", idx)
+                        # Persist summary so WS can deliver it in task_complete event
+                        self._task.agent_summary = summary
                     try:
                         self.rebuild_and_verify(idx, verify_url=verify_url)
                         tool_results.append({
