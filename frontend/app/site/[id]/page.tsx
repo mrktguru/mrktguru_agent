@@ -1423,7 +1423,7 @@ function InputRequestMsg({ data, active, values, onChange, onSubmit, busy }: {
         <div className="mb-3 rounded-xl bg-amber-50 border border-amber-100 px-3.5 py-2.5 text-xs space-y-1">
           <div className="flex justify-between"><span className="text-amber-700">Потрачено</span><span className="font-medium text-amber-800">{Math.round(data.spent || 0)} кр.</span></div>
           <div className="flex justify-between"><span className="text-amber-700">Резерв</span><span className="font-medium text-amber-800">{Math.round(data.reserved || 0)} кр.</span></div>
-          {data.requested_extra > 0 && (
+          {(data.requested_extra ?? 0) > 0 && (
             <div className="flex justify-between"><span className="text-amber-700">Нужно дополнительно</span><span className="font-medium text-amber-800">~{Math.round(data.requested_extra || 0)} кр.</span></div>
           )}
         </div>
