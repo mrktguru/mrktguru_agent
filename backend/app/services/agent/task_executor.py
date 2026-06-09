@@ -145,6 +145,10 @@ class TaskExecutor:
         self._spent_credits = spent0
         self._guard = BudgetGuard(reserved, spent=spent0)
 
+        # Capture before-state screenshot (fresh start only — not on resume).
+        if start_idx == 0 and self._site.url:
+            self._capture_before_screenshot()
+
         for idx in range(start_idx, len(enabled)):
             subtask = enabled[idx]
             self._log(f"━━━ Задача {idx+1}/{len(enabled)}: {subtask['title']} ━━━", "running", idx)
@@ -205,6 +209,10 @@ class TaskExecutor:
         self._task.changed_files = list(set(changed_files))
         self._task.file_diffs = self._file_diffs or None
         self._task.backup_available = self._backup.has_backups(str(self._task.id))
+
+        # Visual QA — compare before/after with Claude Vision.
+        self._run_visual_qa()
+
         # Settle: charge actual client credits, release the hold, write the ledger.
         from app.services.billing.settlement import settle
         settle(self._db, self._task, spent_credits=self._spent_credits, status="done")
@@ -990,11 +998,6 @@ class TaskExecutor:
         self._headless_verify(url, subtask_index)
 
     def _headless_verify(self, url: str, subtask_index: int | None) -> None:
-        is_frontend = bool(getattr(self._site, "needs_rebuild", False)) or bool(
-            getattr(self._site, "framework", None)
-        )
-        if not is_frontend:
-            return
         try:
             from app.services.verify.headless import headless_check, headless_available
         except Exception:
@@ -1019,6 +1022,52 @@ class TaskExecutor:
             self._last_verify_output = "Headless: " + " | ".join(detail)
             raise RuntimeError(self._last_verify_output)
         self._log("✅ Браузер: DOM ок, console-ошибок нет", "success", subtask_index)
+
+    def _capture_before_screenshot(self) -> None:
+        """Capture site state before any edits. Silently skips on failure."""
+        try:
+            from app.services.verify.headless import headless_check, headless_available
+            if not headless_available():
+                return
+            res = headless_check(self._site.url, expected_markers=[], full_page=False)
+            if res.get("screenshot_b64"):
+                self._task.screenshot_before = res["screenshot_b64"]
+                self._db.flush()
+        except Exception:
+            pass
+
+    def _run_visual_qa(self) -> None:
+        """Compare before/after screenshots with Claude Vision. Logs result; never raises."""
+        before = self._task.screenshot_before
+        after = self._task.screenshot_after
+        if not before or not after:
+            return
+        try:
+            from app.services.verify.visual_qa import visual_qa
+            desc = (self._task.tz_text or self._task.title or "")[:800]
+            verdict = visual_qa(before, after, desc)
+            if verdict.get("error"):
+                self._log(f"  ⚠ visual_qa: {verdict['error'][:120]}", "running", None)
+                return
+            icon = "✅" if verdict.get("ok") else "⚠"
+            conf = verdict.get("confidence", "?")
+            notes = verdict.get("notes", "")
+            self._log(
+                f"{icon} Визуальная проверка ({conf}): {notes[:200]}",
+                "success" if verdict.get("ok") else "warning",
+                None,
+            )
+            # Auto-rollback only on high-confidence failure
+            if not verdict.get("ok") and conf == "high":
+                self._log("↩ Визуальная проверка показала проблему — откатываю...", "running", None)
+                try:
+                    self._backup.restore_all(str(self._task.id))
+                    self._log("↩ Откат выполнен (по результатам визуальной проверки)", "rollback", None)
+                    self._task.status = "rolled_back"
+                except Exception as rb_exc:
+                    self._log(f"⚠ Откат не удался: {rb_exc}", "error", None)
+        except Exception as exc:
+            self._log(f"  ⚠ visual_qa: {exc}", "running", None)
 
     @staticmethod
     def _same_host(url_a: str, url_b: str) -> bool:

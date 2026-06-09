@@ -73,6 +73,8 @@ type Task = {
   tracks?: Track[] | null; pending_input?: PendingInput | null; answer_text?: string | null;
   spec?: Record<string, unknown> | null;
   upsell?: UpsellItem[] | null;
+  screenshot_before?: string | null;
+  screenshot_after?: string | null;
 };
 
 type LogLine = {
@@ -86,7 +88,7 @@ type MsgAnalyzing = { kind: "analyzing" };
 type MsgClarify = { kind: "clarify"; data: Clarification };
 type MsgEstimate = { kind: "estimate"; data: TaskEstimate; subtasks: Subtask[] };
 type MsgRunning = { kind: "running"; taskId: string; backupAvailable?: boolean; isRollback?: boolean };
-type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null; estimated?: number | null; actual?: number | null; reserved?: number | null; upsell?: UpsellItem[] | null };
+type MsgDone = { kind: "done"; status: string; taskId: string; logs: LogLine[] | null; backupAvailable?: boolean; errorMessage?: string | null; estimated?: number | null; actual?: number | null; reserved?: number | null; upsell?: UpsellItem[] | null; screenshotBefore?: string | null; screenshotAfter?: string | null };
 type MsgError = { kind: "error"; text: string };
 type MsgInputRequest = { kind: "input_request"; taskId: string; data: PendingInput };
 type MsgAnswered = { kind: "answered"; taskId: string; answer: string };
@@ -651,6 +653,7 @@ export default function SitePage() {
             backupAvailable: t.backup_available, errorMessage: t.error_message,
             estimated: t.estimated_credits, actual: t.actual_credits, reserved: t.reserved_credits,
             upsell: t.upsell,
+            screenshotBefore: t.screenshot_before, screenshotAfter: t.screenshot_after,
           });
           break;
         case "rolled_back":
@@ -870,7 +873,8 @@ export default function SitePage() {
             const t = data.find(x => x.id === taskId);
             if (t) setMessages(prev => prev.map(m =>
               m.kind === "done" && m.taskId === taskId
-                ? { ...m, estimated: t.estimated_credits, actual: t.actual_credits, reserved: t.reserved_credits }
+                ? { ...m, estimated: t.estimated_credits, actual: t.actual_credits, reserved: t.reserved_credits,
+                    screenshotBefore: t.screenshot_before, screenshotAfter: t.screenshot_after }
                 : m
             ));
           })
@@ -1250,6 +1254,28 @@ export default function SitePage() {
                             setTimeout(() => inputRef.current?.focus(), 50);
                           }}
                         />
+                      )}
+                      {msg.kind === "done" && msg.screenshotAfter && (
+                        <div className="mt-3 space-y-2">
+                          {msg.screenshotBefore && (
+                            <div className="space-y-1">
+                              <p className="text-xs text-text-muted">До</p>
+                              <img
+                                src={`data:image/png;base64,${msg.screenshotBefore}`}
+                                alt="До правки"
+                                className="rounded border border-border w-full object-cover max-h-48"
+                              />
+                            </div>
+                          )}
+                          <div className="space-y-1">
+                            <p className="text-xs text-text-muted">После</p>
+                            <img
+                              src={`data:image/png;base64,${msg.screenshotAfter}`}
+                              alt="После правки"
+                              className="rounded border border-border w-full object-cover max-h-48"
+                            />
+                          </div>
+                        </div>
                       )}
                     </AgentBubble>
                   )}

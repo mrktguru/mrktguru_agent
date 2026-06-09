@@ -17,7 +17,7 @@ def headless_available() -> bool:
 
 
 def headless_check(url: str, expected_markers: list[str] | None = None,
-                   timeout_ms: int = 25000) -> dict:
+                   timeout_ms: int = 25000, full_page: bool = False) -> dict:
     """Load a page in headless chromium. Returns:
     {ok, console_errors[], missing_markers[], screenshot_b64, error}.
 
@@ -46,7 +46,7 @@ def headless_check(url: str, expected_markers: list[str] | None = None,
             page.wait_for_timeout(1200)  # let client JS render
             html = page.content()
             try:
-                png = page.screenshot(full_page=False)
+                png = page.screenshot(full_page=full_page)
                 res["screenshot_b64"] = base64.b64encode(png).decode()
             except Exception:
                 pass
