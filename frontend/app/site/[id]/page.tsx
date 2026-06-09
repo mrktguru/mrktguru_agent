@@ -1222,7 +1222,7 @@ export default function SitePage() {
                     <AgentBubble label={
                       msg.status === "rolled_back" ? "SiteDoc AI — откатено ↩"
                       : msg.status === "done" ? "SiteDoc AI — выполнено ✓"
-                      : msg.status === "stalled" ? "SiteDoc AI — остановлено (лимит бюджета)"
+                      : msg.status === "stalled" ? "SiteDoc AI — остановлено (нужно пополнить баланс)"
                       : "SiteDoc AI — завершено с ошибками"
                     }>
                       <LogBlock
@@ -1418,24 +1418,18 @@ function InputRequestMsg({ data, active, values, onChange, onSubmit, busy }: {
   // Budget-overage pause → approve extra credits to continue (CREDIT_MECHANICS.md §7 Б).
   if (data.kind === "budget_overage") {
     return (
-      <AgentBubble label="SiteDoc AI — нужна доплата">
+      <AgentBubble label="SiteDoc AI — нужно пополнить баланс">
         <p className="text-sm text-text-main whitespace-pre-wrap mb-3">{data.message}</p>
         <div className="mb-3 rounded-xl bg-amber-50 border border-amber-100 px-3.5 py-2.5 text-xs space-y-1">
           <div className="flex justify-between"><span className="text-amber-700">Потрачено</span><span className="font-medium text-amber-800">{Math.round(data.spent || 0)} кр.</span></div>
           <div className="flex justify-between"><span className="text-amber-700">Резерв</span><span className="font-medium text-amber-800">{Math.round(data.reserved || 0)} кр.</span></div>
-          <div className="flex justify-between"><span className="text-amber-700">Нужно дополнительно</span><span className="font-medium text-amber-800">~{Math.round(data.requested_extra || 0)} кр.</span></div>
+          {data.requested_extra > 0 && (
+            <div className="flex justify-between"><span className="text-amber-700">Нужно дополнительно</span><span className="font-medium text-amber-800">~{Math.round(data.requested_extra || 0)} кр.</span></div>
+          )}
         </div>
-        {active ? (
-          <button
-            onClick={onSubmit}
-            disabled={busy}
-            className="bg-accent text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-40"
-          >
-            {busy ? "Продолжаю..." : `▶ Продолжить · +${Math.round(data.requested_extra || 0)} кр.`}
-          </button>
-        ) : (
-          <p className="text-xs text-text-muted">Доплата одобрена, продолжаю…</p>
-        )}
+        <a href="/billing" className="inline-block bg-accent text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-accent-hover transition-colors">
+          Пополнить баланс
+        </a>
       </AgentBubble>
     );
   }

@@ -191,8 +191,8 @@ class TaskExecutor:
                 settle(self._db, self._task, spent_credits=self._spent_credits, status="stalled")
                 self._db.commit()
                 self._log(
-                    f"🛑 Превышен лимит бюджета (×3 резерва): потрачено {stop.spent:.0f} кр. "
-                    "Задача остановлена, резерв разморожен.", "error", idx,
+                    f"🛑 Кредиты исчерпаны: потрачено {stop.spent:.0f} кр. "
+                    "Пополните баланс и запустите задачу снова.", "error", idx,
                 )
                 return
             except Exception as exc:
@@ -278,9 +278,9 @@ class TaskExecutor:
     def _budget_gate(self, messages: list[dict], idx: int, verify_rounds: int, subtask: dict) -> None:
         """Act on the budget ratio at the top of an agent step.
 
-        WARN/COMPRESS → log + compact (non-blocking). PAUSE → raise PauseSignal
-        for overage approval (reuses the pause primitive). HARD_STOP → raise
-        BudgetHardStop (suspend as stalled, unfreeze)."""
+        WARN/COMPRESS → log + compact (non-blocking). PAUSE → auto-extend reserve
+        from user balance (no approval needed); if balance insufficient → HARD_STOP.
+        HARD_STOP → raise BudgetHardStop (suspend as stalled, unfreeze)."""
         if self._guard is None:
             return
         status = self._guard.status()
@@ -298,7 +298,6 @@ class TaskExecutor:
             self._compact_history(messages)
             return
 
-        # PAUSE / HARD_STOP both suspend the whole task with the serialized thread.
         resume_state = {
             "messages": self._serialize_messages(messages),
             "pending_tool_use_id": None,
@@ -310,20 +309,44 @@ class TaskExecutor:
         reserved = round(self._guard.reserved, 1)
         if status == BudgetStatus.HARD_STOP:
             raise BudgetHardStop(resume_state, spent, reserved)
-        requested = max(1.0, round(self._guard.reserved * 0.5))
-        pending = {
-            "kind": "budget_overage",
-            "message": (
-                f"Задача оказалась сложнее: израсходован весь резерв ({reserved:.0f} кр.). "
-                f"Чтобы продолжить, нужно ещё ~{requested:.0f} кр."
-            ),
-            "required_fields": [],
-            "spent": spent,
-            "reserved": reserved,
-            "requested_extra": requested,
-            "track_id": subtask.get("track_id"),
-        }
-        raise PauseSignal(pending, resume_state)
+        # PAUSE: auto-extend from available balance instead of suspending.
+        extension = max(5.0, round(self._guard.reserved * 0.5))
+        if self._try_extend_reserve(extension, idx):
+            return  # reserve expanded → keep running
+        raise BudgetHardStop(resume_state, spent, reserved)
+
+    def _try_extend_reserve(self, extension: float, idx: int) -> bool:
+        """Freeze `extension` more credits from the user's available balance.
+
+        Returns True and expands the guard if the balance covers it; False otherwise.
+        """
+        from sqlalchemy import select as sa_select
+        from app.models.user import User
+        try:
+            user = self._db.execute(
+                sa_select(User).where(User.id == self._task.user_id).with_for_update()
+            ).scalar_one_or_none()
+            if user is None:
+                return False
+            available = (user.token_credits or 0.0) - (user.frozen_credits or 0.0)
+            if available < extension:
+                needed = round(extension - max(0.0, available), 1)
+                self._log(
+                    f"💳 Резерв исчерпан. На балансе недостаточно кредитов "
+                    f"(нужно ещё ~{needed:.0f} кр.). Пополните баланс и запустите задачу снова.",
+                    "error", idx,
+                )
+                return False
+            user.frozen_credits = (user.frozen_credits or 0.0) + extension
+            self._task.reserved_credits = (self._task.reserved_credits or 0.0) + extension
+            self._guard.reserved += extension
+            self._guard.hard_limit = self._guard.reserved * self._guard.HARD_LIMIT_MULTIPLIER
+            self._db.flush()
+            self._log(f"⚡ Резерв расширен автоматически +{extension:.0f} кр.", "running", idx)
+            return True
+        except Exception as e:
+            self._log(f"⚠ Не удалось расширить резерв: {e}", "running", idx)
+            return False
 
     def _agent_tools(self) -> list[dict]:
         return [
