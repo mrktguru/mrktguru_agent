@@ -743,7 +743,7 @@ export default function SitePage() {
         replaceLast({ kind: "answered", taskId: (data as any).task_id, answer: (data as any).answer });
         setPendingClarify(null);
       } else if ((data as any).status === "specifying") {
-        const sp = data as SpecifyingResp;
+        const sp = data as unknown as SpecifyingResp;
         replaceLast({ kind: "specifying", taskId: sp.task_id, spec: sp.spec, specType: sp.spec_type });
         setPendingClarify(null);
       } else if ((data as Clarification).status === "needs_clarification") {
