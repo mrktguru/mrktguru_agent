@@ -913,11 +913,13 @@ export default function SitePage() {
       }
     };
     const TERMINAL_STATUSES = new Set(["done", "failed", "rolled_back", "stalled", "answered"]);
+    let wsRetries = 0;
     const handleWsDisconnect = () => {
       // Before showing an error, check if the task actually finished via REST.
       api.get<Task[]>(`/api/sites/${id}/tasks`).then(({ data }) => {
         const t = data.find(x => x.id === taskId);
         if (t && TERMINAL_STATUSES.has(t.status)) {
+          // Task finished — render done bubble with all data from REST.
           setAllTasks(data);
           setRunningLogs(p => ({ ...p, [taskId]: p[taskId] || [] }));
           setMessages(prev => prev.map(m => {
@@ -935,18 +937,27 @@ export default function SitePage() {
           }));
           refreshBalance();
           setBusy(false);
+        } else if (t && t.status === "running" && wsRetries < 3) {
+          // Task still running — reconnect WS after short delay.
+          wsRetries++;
+          setTimeout(() => startWs(taskId), 3000);
         } else {
-          setMessages(prev => prev.map(m =>
-            m.kind === "running" && m.taskId === taskId
-              ? { kind: "error", text: "Соединение прервано. Обновите страницу." }
-              : m
-          ));
+          // Task stuck or unreachable — show failure state.
+          setMessages(prev => prev.map(m => {
+            if (m.kind !== "running" || m.taskId !== taskId) return m;
+            return {
+              kind: "done", status: "failed", taskId,
+              logs: null, backupAvailable: false,
+              errorMessage: t?.error_message || "Соединение прервано. Обновите страницу.",
+            } satisfies MsgDone;
+          }));
           setBusy(false);
         }
       }).catch(() => {
         setMessages(prev => prev.map(m =>
           m.kind === "running" && m.taskId === taskId
-            ? { kind: "error", text: "Соединение прервано. Обновите страницу." }
+            ? { kind: "done", status: "failed", taskId, logs: null, backupAvailable: false,
+                errorMessage: "Соединение прервано. Обновите страницу." } satisfies MsgDone
             : m
         ));
         setBusy(false);

@@ -18,3 +18,12 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
 )
+
+
+@celery_app.on_after_finalize.connect
+def _cleanup_on_start(sender, **kwargs):
+    from app.tasks.cleanup import cleanup_orphan_tasks
+    try:
+        cleanup_orphan_tasks()
+    except Exception:
+        pass

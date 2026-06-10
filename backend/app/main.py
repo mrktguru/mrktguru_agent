@@ -21,6 +21,11 @@ async def lifespan(app: FastAPI):
         seed_solutions()
     except Exception:
         pass  # don't block startup if DB not ready
+    try:
+        from app.tasks.cleanup import cleanup_orphan_tasks
+        cleanup_orphan_tasks()
+    except Exception:
+        pass
     yield
 
 
