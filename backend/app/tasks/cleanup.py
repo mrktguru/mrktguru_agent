@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
-ORPHAN_STATUSES = {"running", "approved", "rolling_back"}
+ORPHAN_STATUSES = {"running", "approved", "rolling_back", "waiting_for_user"}
 ORPHAN_AFTER_MINUTES = 10
 
 
@@ -45,7 +45,10 @@ def cleanup_orphan_tasks() -> int:
                     select(func.coalesce(func.sum(TaskLog.credits), 0.0))
                     .where(TaskLog.task_id == task.id)
                 ) or 0.0)
-                settle(db, task, spent_credits=spent, status="failed")
+                if task.settled_at is None:
+                    settle(db, task, spent_credits=spent, status="failed")
+                # Always force terminal status — settled_at may be set but status stuck.
+                task.status = "failed"
                 task.error_message = "Прервано при перезапуске системы"
                 cleaned += 1
 
